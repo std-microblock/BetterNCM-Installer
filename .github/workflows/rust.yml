@@ -17,4 +17,4 @@ jobs:
     steps:
     - uses: actions/checkout@v3
     - name: Build
-      run: cargo build --verbose --target x86_64-pc-windows-gnu
+      run: cargo build --verbose --release
