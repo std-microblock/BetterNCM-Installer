@@ -1,3 +1,11 @@
+# 已弃用，被[BetterNCM-v2](https://github.com/BetterNCM/BetterNCM-v2)替代
+
+
+
+-------
+
+
+
 # BetterNCM Installer
 ### PC版网易云音乐客户端插件管理器
 一键安装[BetterNCM](https://github.com/MicroCBer/BetterNCM)
