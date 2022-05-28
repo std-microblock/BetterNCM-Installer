@@ -1,9 +1,3 @@
-# 已弃用，被[BetterNCM-v2](https://github.com/BetterNCM/BetterNCM-v2)替代
-
-
-
--------
-
 
 
 # BetterNCM Installer
