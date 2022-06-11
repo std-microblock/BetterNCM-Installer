@@ -128,7 +128,7 @@ async fn main() -> Result<(), PlatformError> {
 
         event_sink.add_idle_callback(move |data: &mut AppData| {
             (*data).latest_version = Some(Version::from_version_string(
-                releases["name"].as_str().unwrap(),
+                releases["tag_name"].as_str().unwrap(),
             ));
             (*data).latest_download_url = Some(
                 releases["assets"][0]["browser_download_url"]
