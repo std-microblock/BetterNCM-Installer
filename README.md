@@ -11,7 +11,7 @@
 # BetterNCM
 ![Microrange](https://github.com/MicroCBer/BetterNCMPlugins/raw/main/Stylesheets/Theme-Microrange/white.png)
 
-最新测试兼容版本：`2.9.8`
+最新测试兼容版本：`2.9.10`
 
 # 插件库
 [BetterNCMPlugins](https://github.com/MicroCBer/BetterNCMPlugins)
