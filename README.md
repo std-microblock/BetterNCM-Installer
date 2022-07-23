@@ -13,4 +13,4 @@
 最新测试兼容版本：`2.9.10`
 
 # 插件库
-[BetterNCMPlugins](https://github.com/MicroCBer/BetterNCMPlugins)
+已在BetterNCM内置
