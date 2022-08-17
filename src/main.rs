@@ -270,7 +270,7 @@ fn ui_builder() -> impl Widget<AppData> {
             let event_sink_getvers = ctx.get_external_handle();
             let url: String = data.latest_download_url.as_ref().unwrap().clone();
             tokio::spawn(async move {
-                tokio::fs::remove_file("betterncm.dll");
+                tokio::fs::remove_file("betterncm.dll").await;
                 download_file(&url, &"betterncm.dll".to_string(), event_sink).await;
                 Command::new("taskkill.exe")
                     .args(["/f", "/im", "cloudmusic.exe"])
