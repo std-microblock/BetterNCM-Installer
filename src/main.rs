@@ -15,8 +15,8 @@ use winreg::RegKey;
 
 use druid::widget::{Button, Flex, Label, ProgressBar};
 use druid::{
-    AppLauncher, Data, FontDescriptor, FontWeight, Lens, PlatformError, Widget,
-    WidgetExt, WindowDesc,
+    AppLauncher, Data, FontDescriptor, FontWeight, Lens, PlatformError, Widget, WidgetExt,
+    WindowDesc,
 };
 
 #[derive(Eq, Ord, Clone, Copy, Data, Debug)]
@@ -63,7 +63,8 @@ struct AppData {
     progress: f64,
 
     latest_version: Option<Version>,
-    local_version: Option<Version>,
+    old_version: bool,
+    new_version: bool,
     installer_version: Version,
 
     #[data(eq)]
@@ -94,7 +95,16 @@ async fn main() -> Result<(), PlatformError> {
     let mut data = AppData {
         progress: 0.,
         latest_version: None,
-        local_version: None,
+        old_version: if let Ok(path) = get_ncm_install_path() {
+            fs::try_exists(path + "/cloudmusicn.exe").unwrap()
+        } else {
+            false
+        },
+        new_version: if let Ok(path) = get_ncm_install_path() {
+            fs::try_exists(path + "/msimg32.dll").unwrap()
+        } else {
+            false
+        },
         latest_download_url: None,
         installer_version: Version::from_version_string(env!("CARGO_PKG_VERSION")),
         ncm_install_path: if let Ok(path) = get_ncm_install_path() {
@@ -109,10 +119,10 @@ async fn main() -> Result<(), PlatformError> {
     let event_sink = launcher.get_external_handle();
 
     tokio::spawn(async move {
-        use serde_json::{Value};
+        use serde_json::Value;
         let client = reqwest::Client::new();
         let releases = client
-            .get("https://api.github.com/repos/MicroCBer/BetterNCM/releases/latest")
+            .get("https://gitee.com/microblock/better-ncm-v2-data/raw/master/betterncm/betterncm.json")
             .header(
                 "User-Agent",
                 format!("BetterNCM Installer {};", data.installer_version),
@@ -128,10 +138,10 @@ async fn main() -> Result<(), PlatformError> {
 
         event_sink.add_idle_callback(move |data: &mut AppData| {
             (*data).latest_version = Some(Version::from_version_string(
-                releases["tag_name"].as_str().unwrap(),
+                releases["versions"][0]["version"].as_str().unwrap(),
             ));
             (*data).latest_download_url = Some(
-                releases["assets"][0]["browser_download_url"]
+                releases["versions"][0]["file"]
                     .as_str()
                     .unwrap()
                     .to_string(),
@@ -139,52 +149,37 @@ async fn main() -> Result<(), PlatformError> {
         });
     });
 
-    get_local_version(&mut data);
-
     launcher.log_to_console().launch(data)
 }
 
-fn get_ncm_localdata_path() -> String{
-    let appdata=env::var("APPDATA").unwrap();
-    let ncmdata=Path::new(&appdata);
-    ncmdata.parent().unwrap().join("Local").join("Netease").join("CloudMusic").to_str().unwrap().to_string()
+fn get_ncm_localdata_path() -> String {
+    let appdata = env::var("APPDATA").unwrap();
+    let ncmdata = Path::new(&appdata);
+    ncmdata
+        .parent()
+        .unwrap()
+        .join("Local")
+        .join("Netease")
+        .join("CloudMusic")
+        .to_str()
+        .unwrap()
+        .to_string()
 }
 
-fn set_noproxy_localdata(){
-    fs::write(get_ncm_localdata_path()+"/localdata",include_bytes!("localdata/localdata_noproxy")).unwrap();
+fn set_noproxy_localdata() {
+    fs::write(
+        get_ncm_localdata_path() + "/localdata",
+        include_bytes!("localdata/localdata_noproxy"),
+    )
+    .unwrap();
 }
 
-fn set_proxied_localdata(){
-    fs::write(get_ncm_localdata_path()+"/localdata",include_bytes!("localdata/localdata_proxied")).unwrap();
-}
-
-fn get_local_version(data: &mut AppData) {
-    println!("Attempt to get local version...");
-    if let Ok(path) = get_ncm_install_path() {
-        println!(" Netease cloud music install path:{}",path);
-        let path = Path::new(&path);
-        if let Ok(p) = std::fs::try_exists(path.join("cloudmusicn.exe").to_str().unwrap()) {
-            if p {
-                std::fs::remove_file(format!("{}/version.txt", config_path()));
-                let _ = std::process::Command::new(path.join("cloudmusic.exe").to_str().unwrap())
-                    .arg("--version")
-                    .spawn()
-                    .unwrap()
-                    .wait()
-                    .unwrap();
-                if let Ok(version) = std::fs::read_to_string(format!("{}/version.txt", config_path())) {
-                    data.local_version = Some(Version::from_version_string(&version));
-                }else{
-                    data.local_version=Some(Version{major:0,minor:1,patch:1});
-                }
-            } else {
-                (*data).local_version = Some(Version::from_version_string("0.0.0"));
-            }
-        }
-    } else {
-        (*data).local_version = Some(Version::from_version_string("0.0.0"));
-    }
-    println!("Succeeded in getting local version!");
+fn set_proxied_localdata() {
+    fs::write(
+        get_ncm_localdata_path() + "/localdata",
+        include_bytes!("localdata/localdata_proxied"),
+    )
+    .unwrap();
 }
 
 fn get_ncm_install_path() -> Result<String, std::io::Error> {
@@ -238,14 +233,11 @@ fn ui_builder() -> impl Widget<AppData> {
         ),
     );
 
-    let local_version_label = Flex::row().with_child(Label::new("已安装版本")).with_child(
+    let local_version_label = Flex::row().with_child(
         Label::new(|data: &AppData, _env: &_| -> String {
-            match data.local_version {
-                Some(version) => String::from(match version.to_string().as_str() {
-                    "0.0.0" => "未安装",
-                    o => o,
-                }),
-                None => String::from("获取中..."),
+            match data.old_version {
+                true => String::from("检测到老版本BetterNCM 请先卸载"),
+                false => String::from(""),
             }
         })
         .with_font(
@@ -271,64 +263,15 @@ fn ui_builder() -> impl Widget<AppData> {
             ),
         );
 
-    let button_update = Button::new("更新")
-        .disabled_if(|data: &AppData, _env: &_| {
-            data.latest_version.is_none()
-                || data.local_version.is_none()
-                || data.local_version.unwrap() >= data.latest_version.unwrap()
-                || data.local_version.unwrap().to_string() == "0.0.0"
-        })
-        .on_click(|_ctx, data, _env| {
-            let event_sink = _ctx.get_external_handle();
-            let event_sink_getvers = _ctx.get_external_handle();
-            let url: String = data.latest_download_url.as_ref().unwrap().clone();
-            tokio::spawn(async move {
-                fs::remove_file("betterncm.exe");
-                download_file(&url, &"betterncm.exe".to_string(), event_sink).await;
-                Command::new("taskkill.exe")
-                    .args(["/f", "/im", "cloudmusic.exe"])
-                    .spawn()
-                    .unwrap()
-                    .wait()
-                    .unwrap();
-                
-                fs::remove_file(format!(
-                    "{}/cloudmusic.exe",
-                    get_ncm_install_path().unwrap()
-                ))
-                .unwrap();
-                set_proxied_localdata();
-                fs::copy(
-                    "betterncm.exe",
-                    format!("{}/cloudmusic.exe", get_ncm_install_path().unwrap()),
-                )
-                .unwrap();
-                event_sink_getvers.add_idle_callback(|data| {
-                    get_local_version(data);
-                });
-                Command::new(format!(
-                    "{}/cloudmusic.exe",
-                    get_ncm_install_path().unwrap()
-                ))
-                .current_dir(get_ncm_install_path().unwrap())
-                .spawn()
-            });
-        })
-        .padding(5.0);
-
     let button_install = Button::new("安装")
-        .disabled_if(|data: &AppData, _env: &_| {
-            data.latest_version.is_none()
-                || data.local_version.is_none()
-                || data.local_version.unwrap().to_string() != "0.0.0"
-        })
+        .disabled_if(|data: &AppData, _env: &_| data.latest_version.is_none() || data.old_version || data.new_version)
         .on_click(|ctx, data, _env| {
             let event_sink = ctx.get_external_handle();
             let event_sink_getvers = ctx.get_external_handle();
             let url: String = data.latest_download_url.as_ref().unwrap().clone();
             tokio::spawn(async move {
-                tokio::fs::remove_file("betterncm.exe");
-                download_file(&url, &"betterncm.exe".to_string(), event_sink).await;
+                tokio::fs::remove_file("betterncm.dll");
+                download_file(&url, &"betterncm.dll".to_string(), event_sink).await;
                 Command::new("taskkill.exe")
                     .args(["/f", "/im", "cloudmusic.exe"])
                     .spawn()
@@ -336,20 +279,21 @@ fn ui_builder() -> impl Widget<AppData> {
                     .wait()
                     .unwrap();
 
-                tokio::fs::rename(
-                    format!("{}/cloudmusic.exe", get_ncm_install_path().unwrap()),
-                    format!("{}/cloudmusicn.exe", get_ncm_install_path().unwrap()),
-                ).await
-                .unwrap();
-                set_proxied_localdata();
                 tokio::fs::copy(
-                    "betterncm.exe",
-                    format!("{}/cloudmusic.exe", get_ncm_install_path().unwrap()),
-                ).await
+                    "betterncm.dll",
+                    format!("{}/msimg32.dll", get_ncm_install_path().unwrap()),
+                )
+                .await
                 .unwrap();
-                event_sink_getvers.add_idle_callback(|data| {
-                    get_local_version(data);
+
+                event_sink_getvers.add_idle_callback(move |data: &mut AppData|{
+                    (*data).new_version = if let Ok(path) = get_ncm_install_path() {
+                        fs::try_exists(path + "/msimg32.dll").unwrap()
+                    } else {
+                        false
+                    };
                 });
+
                 Command::new(format!(
                     "{}/cloudmusic.exe",
                     get_ncm_install_path().unwrap()
@@ -361,9 +305,41 @@ fn ui_builder() -> impl Widget<AppData> {
         .padding(5.0);
 
     let button_uninstall = Button::new("卸载")
-        .disabled_if(|data: &AppData, _env: &_| {
-            data.local_version.is_none() || data.local_version.unwrap().to_string() == "0.0.0"
+        .disabled_if(|data: &AppData, _env: &_| data.old_version || !data.new_version)
+        .on_click(|_ctx, data, _env| {
+            fs::remove_dir_all(config_path());
+            Command::new("taskkill.exe")
+                .args(["/f", "/im", "cloudmusic.exe"])
+                .spawn()
+                .unwrap()
+                .wait();
+            Command::new("taskkill.exe")
+                .args(["/f", "/im", "cloudmusicn.exe"])
+                .spawn()
+                .unwrap()
+                .wait();
+            fs::remove_file(format!("{}/msimg32.dll", get_ncm_install_path().unwrap()));
+
+            set_noproxy_localdata();
+            fs::remove_file(format!("{}/msimg32.dll", get_ncm_install_path().unwrap()));
+
+            data.new_version = if let Ok(path) = get_ncm_install_path() {
+                fs::try_exists(path + "/msimg32.dll").unwrap()
+            } else {
+                false
+            };
+
+            process::Command::new(format!(
+                "{}/cloudmusic.exe",
+                get_ncm_install_path().unwrap()
+            ))
+            .current_dir(get_ncm_install_path().unwrap())
+            .spawn();
         })
+        .padding(5.0);
+
+    let button_uninstall_old = Button::new("卸载老版本")
+        .disabled_if(|data: &AppData, _env: &_| !data.old_version)
         .on_click(|_ctx, data, _env| {
             fs::remove_dir_all(config_path());
             Command::new("taskkill.exe")
@@ -380,15 +356,21 @@ fn ui_builder() -> impl Widget<AppData> {
                 "{}/cloudmusic.exe",
                 get_ncm_install_path().unwrap()
             ));
+
             fs::rename(
                 format!("{}/cloudmusicn.exe", get_ncm_install_path().unwrap()),
                 format!("{}/cloudmusic.exe", get_ncm_install_path().unwrap()),
             );
+
             set_noproxy_localdata();
-            fs::remove_file(format!("{}/betterncm.exe", get_ncm_install_path().unwrap()));
-            get_local_version(data);
-            process::
-            Command::new(format!(
+
+            data.old_version = if let Ok(path) = get_ncm_install_path() {
+                fs::try_exists(path + "/cloudmusicn.exe").unwrap()
+            } else {
+                false
+            };
+
+            process::Command::new(format!(
                 "{}/cloudmusic.exe",
                 get_ncm_install_path().unwrap()
             ))
@@ -406,13 +388,13 @@ fn ui_builder() -> impl Widget<AppData> {
         .with_child(title)
         .with_child(installer_version_label)
         .with_child(latest_version_label)
-        .with_child(local_version_label)
         .with_child(install_path_label)
+        .with_child(local_version_label)
         .with_child(
             Flex::row()
-                .with_child(button_update)
                 .with_child(button_install)
-                .with_child(button_uninstall),
+                .with_child(button_uninstall)
+                .with_child(button_uninstall_old),
         )
         .with_child(progress_bar)
         .with_child(Label::new(|data: &AppData, _env: &_| -> String {
