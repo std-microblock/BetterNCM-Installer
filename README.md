@@ -2,7 +2,9 @@
 # BetterNCM Installer
 ### PC版网易云音乐客户端插件管理器
 一键安装[BetterNCM](https://github.com/MicroCBer/BetterNCM)
-最新测试兼容版本：`2.10.2`
+最新测试兼容版本：`2.10.3`
+
+网易云版本必须`>=2.10.2`
 
 ![Installer](installer.png)
 
