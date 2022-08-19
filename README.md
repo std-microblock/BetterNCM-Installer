@@ -5,7 +5,7 @@
 一键安装[BetterNCM V2](https://github.com/MicroCBer/BetterNCM)
 最新测试兼容版本：`2.10.3`
 
-网易云版本必须`>=2.10.2`
+**网易云版本必须`>=2.10.2`**
 
 ![image](https://user-images.githubusercontent.com/66859419/185219975-09c6fedd-5394-4c00-8bc7-cecd0846d6ca.png)
 
