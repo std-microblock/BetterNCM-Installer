@@ -12,5 +12,9 @@
 
 ![Installer](installer.png)
 
+# 手动安装流程
+1. 从BetterNCM仓库下载最新版`BetterNCMII.dll`
+2. 打开网易云音乐安装目录，将上一步下载的`BetterNCMII.dll`复制进去并改名为`msimg32.dll`
+
 # 插件库
 已在BetterNCM内置
