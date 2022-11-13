@@ -1,7 +1,11 @@
 #![windows_subsystem = "windows"]
-#![feature(path_try_exists)]
+#![feature(fs_try_exists)]
 extern crate winreg;
 use core::fmt;
+use scl_gui_widgets::{
+    widget_ext::WidgetExt,
+    widgets::{label, Button, WindowWidget, QUERY_CLOSE_WINDOW},
+};
 use std::env;
 use std::fmt::Display;
 use std::fs;
@@ -13,9 +17,12 @@ use std::process::Command;
 use winreg::enums::*;
 use winreg::RegKey;
 
-use druid::widget::{Button, Flex, Label, ProgressBar};
 use druid::{
-    AppLauncher, Data, FontDescriptor, FontWeight, Lens, PlatformError, Widget, WidgetExt,
+    commands::CLOSE_ALL_WINDOWS,
+    widget::{Flex, ProgressBar},
+};
+use druid::{
+    AppLauncher, Data, FontDescriptor, FontWeight, Lens, PlatformError, Widget, WidgetExt as _,
     WindowDesc,
 };
 
@@ -91,6 +98,7 @@ async fn main() -> Result<(), PlatformError> {
     let main_window = WindowDesc::new(ui_builder())
         .window_size((400., 280.))
         .resizable(false)
+        .show_titlebar(false)
         .title("BetterNCM Installer");
     let mut data = AppData {
         progress: 0.,
@@ -149,7 +157,15 @@ async fn main() -> Result<(), PlatformError> {
         });
     });
 
-    launcher.log_to_console().launch(data)
+    launcher
+        .log_to_console()
+        .configure_env(|env, _| {
+            scl_gui_widgets::theme::color::set_color_to_env(
+                env,
+                scl_gui_widgets::theme::color::Theme::Dark,
+            );
+        })
+        .launch(data)
 }
 
 fn get_ncm_localdata_path() -> String {
@@ -197,74 +213,48 @@ fn get_ncm_install_path() -> Result<String, std::io::Error> {
 }
 
 fn ui_builder() -> impl Widget<AppData> {
-    let title = Label::new(String::from("BetterNCM Installer"))
-        .with_font(
-            FontDescriptor::default()
-                .with_size(30.)
-                .with_weight(FontWeight::BOLD),
-        )
-        .padding(5.0)
-        .center();
 
     let installer_version_label = Flex::row()
-        .with_child(Label::new("Installer版本"))
+        .with_child(label::new("Installer 版本："))
         .with_child(
-            Label::new(|data: &AppData, _env: &_| -> String {
+            label::new(|data: &AppData, _env: &_| -> String {
                 format!("{}", data.installer_version.to_string())
-            })
-            .with_font(
-                FontDescriptor::default()
-                    .with_size(20.)
-                    .with_weight(FontWeight::SEMI_BOLD),
-            ),
+            }),
         );
 
-    let latest_version_label = Flex::row().with_child(Label::new("最新版本")).with_child(
-        Label::new(|data: &AppData, _env: &_| -> String {
+    let latest_version_label = Flex::row().with_child(label::new("最新版本：")).with_child(
+        label::new(|data: &AppData, _env: &_| -> String {
             match data.latest_version {
                 Some(version) => format!("{}", version.to_string()),
                 None => String::from("获取中..."),
             }
-        })
-        .with_font(
-            FontDescriptor::default()
-                .with_size(20.)
-                .with_weight(FontWeight::SEMI_BOLD),
-        ),
+        }),
     );
 
     let local_version_label = Flex::row().with_child(
-        Label::new(|data: &AppData, _env: &_| -> String {
+        label::new(|data: &AppData, _env: &_| -> String {
             match data.old_version {
-                true => String::from("检测到老版本BetterNCM 请先卸载"),
+                true => String::from("检测到老版本 BetterNCM 请先卸载"),
                 false => String::from(""),
             }
-        })
-        .with_font(
-            FontDescriptor::default()
-                .with_size(20.)
-                .with_weight(FontWeight::SEMI_BOLD),
-        ),
+        }).show_if(|data, _| data.old_version),
     );
 
     let install_path_label = Flex::row()
-        .with_child(Label::new("网易云安装路径："))
+        .with_child(label::new("网易云安装路径："))
         .with_child(
-            Label::new(|data: &AppData, _env: &_| -> String {
+            label::new(|data: &AppData, _env: &_| -> String {
                 match data.ncm_install_path.clone() {
                     Some(path) => format!("{}", path.to_string()),
                     None => "未安装".to_string(),
                 }
-            })
-            .with_font(
-                FontDescriptor::default()
-                    .with_size(10.)
-                    .with_weight(FontWeight::THIN),
-            ),
+            }),
         );
 
     let button_install = Button::new("安装")
-        .disabled_if(|data: &AppData, _env: &_| data.latest_version.is_none() || data.old_version || data.new_version)
+        .disabled_if(|data: &AppData, _env: &_| {
+            data.latest_version.is_none() || data.old_version || data.new_version
+        })
         .on_click(|ctx, data, _env| {
             let event_sink = ctx.get_external_handle();
             let event_sink_getvers = ctx.get_external_handle();
@@ -286,7 +276,7 @@ fn ui_builder() -> impl Widget<AppData> {
                 .await
                 .unwrap();
 
-                event_sink_getvers.add_idle_callback(move |data: &mut AppData|{
+                event_sink_getvers.add_idle_callback(move |data: &mut AppData| {
                     (*data).new_version = if let Ok(path) = get_ncm_install_path() {
                         fs::try_exists(path + "/msimg32.dll").unwrap()
                     } else {
@@ -301,8 +291,7 @@ fn ui_builder() -> impl Widget<AppData> {
                 .current_dir(get_ncm_install_path().unwrap())
                 .spawn()
             });
-        })
-        .padding(5.0);
+        });
 
     let button_uninstall = Button::new("卸载")
         .disabled_if(|data: &AppData, _env: &_| data.old_version || !data.new_version)
@@ -335,8 +324,7 @@ fn ui_builder() -> impl Widget<AppData> {
             ))
             .current_dir(get_ncm_install_path().unwrap())
             .spawn();
-        })
-        .padding(5.0);
+        });
 
     let button_uninstall_old = Button::new("卸载老版本")
         .disabled_if(|data: &AppData, _env: &_| !data.old_version)
@@ -376,30 +364,41 @@ fn ui_builder() -> impl Widget<AppData> {
             ))
             .current_dir(get_ncm_install_path().unwrap())
             .spawn();
-        })
-        .padding(5.0);
+        });
 
     let progress_bar = ProgressBar::new()
         .lens(AppData::progress)
-        .padding((20., 0.))
         .expand_width();
 
-    Flex::column()
-        .with_child(title)
-        .with_child(installer_version_label)
-        .with_child(latest_version_label)
-        .with_child(install_path_label)
-        .with_child(local_version_label)
-        .with_child(
-            Flex::row()
-                .with_child(button_install)
-                .with_child(button_uninstall)
-                .with_child(button_uninstall_old),
-        )
-        .with_child(progress_bar)
-        .with_child(Label::new(|data: &AppData, _env: &_| -> String {
-            data.tips_string.clone()
-        }))
+    WindowWidget::new(
+        "BetterNCM Installer",
+        Flex::column()
+            .with_child(installer_version_label)
+            .with_child(latest_version_label)
+            .with_child(install_path_label)
+            .with_child(local_version_label)
+            .with_spacer(5.)
+            .with_flex_spacer(1.)
+            .with_child(label::new(|data: &AppData, _env: &_| -> String {
+                data.tips_string.clone()
+            }))
+            .with_spacer(5.)
+            .with_child(
+                Flex::row()
+                    .with_flex_child(button_install.expand_width(), 1.)
+                    .with_spacer(5.)
+                    .with_flex_child(button_uninstall.expand_width(), 1.)
+                    .with_spacer(5.)
+                    .with_flex_child(button_uninstall_old.expand_width(), 1.),
+            )
+            .with_spacer(5.)
+            .with_child(progress_bar)
+            .cross_axis_alignment(druid::widget::CrossAxisAlignment::Start)
+            .padding(10.),
+    )
+    .on_notify(QUERY_CLOSE_WINDOW, |ctx, _, _| {
+        ctx.submit_command(CLOSE_ALL_WINDOWS);
+    })
 }
 
 async fn download_file(url: &String, path: &String, event_sink: druid::ExtEventSink) {

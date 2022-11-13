@@ -11,6 +11,7 @@ winres = "0.1"
 
 [dependencies]
 druid = {git = "https://github.com/linebender/druid"}
+scl-gui-widgets = { path = "../SharpCraftLauncher/scl-gui-widgets" }
 futures = "0.3"
 reqwest = { version = "*", features = ["stream"] }
 tokio = { version = "*", features = ["full"] }
