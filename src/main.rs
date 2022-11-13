@@ -1,5 +1,5 @@
 #![windows_subsystem = "windows"]
-#![feature(path_try_exists)]
+#![feature(fs_try_exists)]
 extern crate winreg;
 use core::fmt;
 use std::env;
@@ -89,7 +89,7 @@ fn config_path() -> String {
 async fn main() -> Result<(), PlatformError> {
     println!("Async main called");
     let main_window = WindowDesc::new(ui_builder())
-        .window_size((400., 280.))
+        .window_size((400., 310.))
         .resizable(false)
         .title("BetterNCM Installer");
     let mut data = AppData {
@@ -264,7 +264,9 @@ fn ui_builder() -> impl Widget<AppData> {
         );
 
     let button_install = Button::new("安装")
-        .disabled_if(|data: &AppData, _env: &_| data.latest_version.is_none() || data.old_version || data.new_version)
+        .disabled_if(|data: &AppData, _env: &_| {
+            data.latest_version.is_none() || data.old_version || data.new_version
+        })
         .on_click(|ctx, data, _env| {
             let event_sink = ctx.get_external_handle();
             let event_sink_getvers = ctx.get_external_handle();
@@ -286,7 +288,7 @@ fn ui_builder() -> impl Widget<AppData> {
                 .await
                 .unwrap();
 
-                event_sink_getvers.add_idle_callback(move |data: &mut AppData|{
+                event_sink_getvers.add_idle_callback(move |data: &mut AppData| {
                     (*data).new_version = if let Ok(path) = get_ncm_install_path() {
                         fs::try_exists(path + "/msimg32.dll").unwrap()
                     } else {
@@ -379,6 +381,14 @@ fn ui_builder() -> impl Widget<AppData> {
         })
         .padding(5.0);
 
+    let button_set_path = Button::new("修改数据地址为 C:/betterncm")
+        .on_click(|_ctx, data, _env| {
+            let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+            let (env, _) = hkcu.create_subkey("Environment").unwrap();
+            env.set_value("BETTERNCM_PROFILE", &"C:/betterncm").unwrap();
+        })
+        .padding(5.0);
+
     let progress_bar = ProgressBar::new()
         .lens(AppData::progress)
         .padding((20., 0.))
@@ -394,8 +404,10 @@ fn ui_builder() -> impl Widget<AppData> {
             Flex::row()
                 .with_child(button_install)
                 .with_child(button_uninstall)
-                .with_child(button_uninstall_old),
+                .with_child(button_uninstall_old)
+                ,
         )
+        .with_child(button_set_path)
         .with_child(progress_bar)
         .with_child(Label::new(|data: &AppData, _env: &_| -> String {
             data.tips_string.clone()
