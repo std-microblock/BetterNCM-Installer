@@ -385,11 +385,11 @@ fn ui_builder() -> impl Widget<AppData> {
         .on_click(|_ctx, data, _env| {
             let hkcu = RegKey::predef(HKEY_CURRENT_USER);
             let (env, _) = hkcu.create_subkey("Environment").unwrap();
-            env.set_value("BETTERNCM_PROFILE", &"C:/betterncm").unwrap();
+            env.set_value("BETTERNCM_PROFILE", &"C:\\betterncm").unwrap();
 
             let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
             let (env, _) = hklm.create_subkey("System\\CurrentControlSet\\Control\\Session Manager\\Environment").unwrap();
-            env.set_value("BETTERNCM_PROFILE", &"C:/betterncm").unwrap();
+            env.set_value("BETTERNCM_PROFILE", &"C:\\betterncm").unwrap();
         })
         .padding(5.0);
 
