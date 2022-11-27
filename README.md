@@ -7,8 +7,7 @@
 
 **网易云版本必须`>=2.10.2`**
 
-![image](https://user-images.githubusercontent.com/66859419/185219975-09c6fedd-5394-4c00-8bc7-cecd0846d6ca.png)
-
+![image](https://user-images.githubusercontent.com/66859419/204120743-a528b624-d016-4f6f-a0d7-e769cdd2dd74.png)
 
 ![Installer](installer.png)
 
