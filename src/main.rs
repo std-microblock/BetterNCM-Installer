@@ -1,83 +1,52 @@
 #![windows_subsystem = "windows"]
 #![feature(fs_try_exists)]
-extern crate winreg;
-use core::fmt;
+#![feature(box_syntax)]
+
+mod ncm_utils;
 use std::env;
-use std::fmt::Display;
 use std::fs;
-use std::io::Error;
-use std::io::ErrorKind;
 use std::path::Path;
+use std::path::PathBuf;
 use std::process;
 use std::process::Command;
-use winreg::enums::*;
-use winreg::RegKey;
 
+use anyhow::Result;
 use druid::widget::{Button, Flex, Label, ProgressBar};
 use druid::{
-    AppLauncher, Data, FontDescriptor, FontWeight, Lens, PlatformError, Widget, WidgetExt,
+    AppLauncher, Data, FontDescriptor, FontWeight, Lens, Widget, WidgetExt,
     WindowDesc,
 };
+use ncm_utils::get_ncm_version;
+use semver::Version;
+use winreg::enums::HKEY_CURRENT_USER;
+use winreg::enums::HKEY_LOCAL_MACHINE;
+use winreg::RegKey;
 
-#[derive(Eq, Ord, Clone, Copy, Data, Debug)]
-struct Version {
-    major: i32,
-    minor: i32,
-    patch: i32,
-}
-
-impl Version {
-    fn from_version_string(version: &str) -> Version {
-        let mut version_parts = version.split(".");
-        let major = version_parts.next().unwrap().parse::<i32>().unwrap();
-        let minor = version_parts.next().unwrap().parse::<i32>().unwrap();
-        let patch = version_parts.next().unwrap().parse::<i32>().unwrap();
-        Version {
-            major,
-            minor,
-            patch,
-        }
-    }
-}
-
-impl Display for Version {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}.{}.{}", self.major, self.minor, self.patch)
-    }
-}
-
-impl PartialEq for Version {
-    fn eq(&self, other: &Version) -> bool {
-        self.major == other.major && self.minor == other.minor && self.patch == other.patch
-    }
-}
-
-impl PartialOrd for Version {
-    fn partial_cmp(&self, other: &Version) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
+use crate::ncm_utils::get_ncm_install_path;
 
 #[derive(Debug, Clone, Data, Lens)]
 struct AppData {
     progress: f64,
-
+    #[data(eq)]
     latest_version: Option<Version>,
     old_version: bool,
     new_version: bool,
+    #[data(eq)]
     installer_version: Version,
 
     #[data(eq)]
     tips_string: String,
     #[data(eq)]
-    ncm_install_path: Option<String>,
+    ncm_install_path: Option<PathBuf>,
     #[data(eq)]
     latest_download_url: Option<String>,
+    #[data(eq)]
+    ncm_version: Option<Version>,
 }
 
 fn config_path() -> String {
     String::from(
-        std::env::home_dir()
+       dirs::home_dir()
             .unwrap()
             .as_os_str()
             .to_str()
@@ -86,32 +55,33 @@ fn config_path() -> String {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), PlatformError> {
-    println!("Async main called");
+async fn main() -> Result<()> {
     let main_window = WindowDesc::new(ui_builder())
         .window_size((400., 310.))
         .resizable(false)
         .title("BetterNCM Installer");
-    let mut data = AppData {
+
+    let data = AppData {
         progress: 0.,
         latest_version: None,
         old_version: if let Ok(path) = get_ncm_install_path() {
-            fs::try_exists(path + "/cloudmusicn.exe").unwrap()
+            path.join("cloudmusicn.exe").exists()
         } else {
             false
         },
         new_version: if let Ok(path) = get_ncm_install_path() {
-            fs::try_exists(path + "/msimg32.dll").unwrap()
+            path.join("msimg32.dll").exists()
         } else {
             false
         },
         latest_download_url: None,
-        installer_version: Version::from_version_string(env!("CARGO_PKG_VERSION")),
+        installer_version: Version::parse(env!("CARGO_PKG_VERSION"))?,
         ncm_install_path: if let Ok(path) = get_ncm_install_path() {
             Some(path)
         } else {
             None
         },
+        ncm_version: get_ncm_version().ok(),
         tips_string: String::new(),
     };
     let launcher = AppLauncher::with_window(main_window);
@@ -125,7 +95,7 @@ async fn main() -> Result<(), PlatformError> {
             .get("https://gitee.com/microblock/better-ncm-v2-data/raw/master/betterncm/betterncm.json")
             .header(
                 "User-Agent",
-                format!("BetterNCM Installer {};", data.installer_version),
+                format!("BetterNCM Installer"),
             )
             .send()
             .await
@@ -137,9 +107,8 @@ async fn main() -> Result<(), PlatformError> {
         let releases: Value = serde_json::from_str(releases.as_str()).unwrap();
 
         event_sink.add_idle_callback(move |data: &mut AppData| {
-            (*data).latest_version = Some(Version::from_version_string(
-                releases["versions"][0]["version"].as_str().unwrap(),
-            ));
+            (*data).latest_version =
+                Version::parse(releases["versions"][0]["version"].as_str().unwrap()).ok();
             (*data).latest_download_url = Some(
                 releases["versions"][0]["file"]
                     .as_str()
@@ -149,7 +118,8 @@ async fn main() -> Result<(), PlatformError> {
         });
     });
 
-    launcher.log_to_console().launch(data)
+    launcher.log_to_console().launch(data)?;
+    Ok(())
 }
 
 fn get_ncm_localdata_path() -> String {
@@ -166,34 +136,12 @@ fn get_ncm_localdata_path() -> String {
         .to_string()
 }
 
-fn set_noproxy_localdata() {
+fn set_noproxy_localdata() -> anyhow::Result<()> {
     fs::write(
         get_ncm_localdata_path() + "/localdata",
         include_bytes!("localdata/localdata_noproxy"),
-    )
-    .unwrap();
-}
-
-fn set_proxied_localdata() {
-    fs::write(
-        get_ncm_localdata_path() + "/localdata",
-        include_bytes!("localdata/localdata_proxied"),
-    )
-    .unwrap();
-}
-
-fn get_ncm_install_path() -> Result<String, std::io::Error> {
-    let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
-    let path: String = hklm
-        .open_subkey("SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\cloudmusic.exe")?
-        .get_value("")?;
-    let path = Path::new(&path);
-    if let Some(path) = path.parent() {
-        let path = path.to_str().unwrap().to_string();
-        Ok(path)
-    } else {
-        Err(Error::new(ErrorKind::Other, "Could not find path"))
-    }
+    )?;
+    Ok(())
 }
 
 fn ui_builder() -> impl Widget<AppData> {
@@ -221,7 +169,7 @@ fn ui_builder() -> impl Widget<AppData> {
 
     let latest_version_label = Flex::row().with_child(Label::new("最新版本")).with_child(
         Label::new(|data: &AppData, _env: &_| -> String {
-            match data.latest_version {
+            match &data.latest_version {
                 Some(version) => format!("{}", version.to_string()),
                 None => String::from("获取中..."),
             }
@@ -248,11 +196,11 @@ fn ui_builder() -> impl Widget<AppData> {
     );
 
     let install_path_label = Flex::row()
-        .with_child(Label::new("网易云安装路径："))
+        .with_child(Label::new("网易云版本："))
         .with_child(
             Label::new(|data: &AppData, _env: &_| -> String {
-                match data.ncm_install_path.clone() {
-                    Some(path) => format!("{}", path.to_string()),
+                match &data.ncm_version {
+                    Some(ver) => format!("{}", ver),
                     None => "未安装".to_string(),
                 }
             })
@@ -272,36 +220,29 @@ fn ui_builder() -> impl Widget<AppData> {
             let event_sink_getvers = ctx.get_external_handle();
             let url: String = data.latest_download_url.as_ref().unwrap().clone();
             tokio::spawn(async move {
-                tokio::fs::remove_file("betterncm.dll").await;
+                tokio::fs::remove_file("betterncm.dll").await?;
                 download_file(&url, &"betterncm.dll".to_string(), event_sink).await;
                 Command::new("taskkill.exe")
                     .args(["/f", "/im", "cloudmusic.exe"])
-                    .spawn()
-                    .unwrap()
-                    .wait()
-                    .unwrap();
+                    .spawn()?
+                    .wait()?;
 
-                tokio::fs::copy(
-                    "betterncm.dll",
-                    format!("{}/msimg32.dll", get_ncm_install_path().unwrap()),
-                )
-                .await
-                .unwrap();
+                tokio::fs::copy("betterncm.dll", get_ncm_install_path()?.join("msimg32.dll"))
+                    .await
+                    .unwrap();
 
                 event_sink_getvers.add_idle_callback(move |data: &mut AppData| {
                     (*data).new_version = if let Ok(path) = get_ncm_install_path() {
-                        fs::try_exists(path + "/msimg32.dll").unwrap()
+                        path.join("msimg32.dll").exists()
                     } else {
                         false
                     };
                 });
 
-                Command::new(format!(
-                    "{}/cloudmusic.exe",
-                    get_ncm_install_path().unwrap()
-                ))
-                .current_dir(get_ncm_install_path().unwrap())
-                .spawn()
+                Command::new(get_ncm_install_path()?.join("cloudmusic.exe"))
+                    .current_dir(get_ncm_install_path()?)
+                    .spawn()?;
+                anyhow::Ok(())
             });
         })
         .padding(5.0);
@@ -309,87 +250,85 @@ fn ui_builder() -> impl Widget<AppData> {
     let button_uninstall = Button::new("卸载")
         .disabled_if(|data: &AppData, _env: &_| data.old_version || !data.new_version)
         .on_click(|_ctx, data, _env| {
-            fs::remove_dir_all(config_path());
-            Command::new("taskkill.exe")
-                .args(["/f", "/im", "cloudmusic.exe"])
-                .spawn()
-                .unwrap()
-                .wait();
-            Command::new("taskkill.exe")
-                .args(["/f", "/im", "cloudmusicn.exe"])
-                .spawn()
-                .unwrap()
-                .wait();
-            fs::remove_file(format!("{}/msimg32.dll", get_ncm_install_path().unwrap()));
+            let mut ins = ||{
+                Command::new("taskkill.exe")
+                    .args(["/f", "/im", "cloudmusic.exe"])
+                    .spawn()?
+                    .wait()?;
+                Command::new("taskkill.exe")
+                    .args(["/f", "/im", "cloudmusicn.exe"])
+                    .spawn()?
+                    .wait()?;
+                fs::remove_file(get_ncm_install_path()?.join("msimg32.dll"))?;
 
-            set_noproxy_localdata();
-            fs::remove_file(format!("{}/msimg32.dll", get_ncm_install_path().unwrap()));
+                set_noproxy_localdata()?;
+                fs::remove_file(get_ncm_install_path()?.join("msimg32.dll"))?;
 
-            data.new_version = if let Ok(path) = get_ncm_install_path() {
-                fs::try_exists(path + "/msimg32.dll").unwrap()
-            } else {
-                false
+                data.new_version = if let Ok(path) = get_ncm_install_path() {
+                    path.join("msimg32.dll").exists()
+                } else {
+                    false
+                };
+
+                process::Command::new( get_ncm_install_path()?.join("cloudmusic.exe"))
+                    .current_dir(get_ncm_install_path()?)
+                    .spawn()?;
+                anyhow::Ok(())
             };
-
-            process::Command::new(format!(
-                "{}/cloudmusic.exe",
-                get_ncm_install_path().unwrap()
-            ))
-            .current_dir(get_ncm_install_path().unwrap())
-            .spawn();
+            ins().unwrap();
         })
         .padding(5.0);
 
     let button_uninstall_old = Button::new("卸载老版本")
         .disabled_if(|data: &AppData, _env: &_| !data.old_version)
         .on_click(|_ctx, data, _env| {
-            fs::remove_dir_all(config_path());
-            Command::new("taskkill.exe")
-                .args(["/f", "/im", "cloudmusic.exe"])
-                .spawn()
-                .unwrap()
-                .wait();
-            Command::new("taskkill.exe")
-                .args(["/f", "/im", "cloudmusicn.exe"])
-                .spawn()
-                .unwrap()
-                .wait();
-            fs::remove_file(format!(
-                "{}/cloudmusic.exe",
-                get_ncm_install_path().unwrap()
-            ));
-
-            fs::rename(
-                format!("{}/cloudmusicn.exe", get_ncm_install_path().unwrap()),
-                format!("{}/cloudmusic.exe", get_ncm_install_path().unwrap()),
-            );
-
-            set_noproxy_localdata();
-
-            data.old_version = if let Ok(path) = get_ncm_install_path() {
-                fs::try_exists(path + "/cloudmusicn.exe").unwrap()
-            } else {
-                false
+            let mut ins=||{
+                fs::remove_dir_all(config_path())?;
+                Command::new("taskkill.exe")
+                    .args(["/f", "/im", "cloudmusic.exe"])
+                    .spawn()?
+                    .wait()?;
+                Command::new("taskkill.exe")
+                    .args(["/f", "/im", "cloudmusicn.exe"])
+                    .spawn()?
+                    .wait()?;
+                fs::remove_file(get_ncm_install_path()?.join("cloudmusic.exe"))?;
+    
+                fs::rename(
+                    get_ncm_install_path()?.join("cloudmusicn.exe"),
+                    get_ncm_install_path()?.join("cloudmusic.exe")
+                )?;
+    
+                set_noproxy_localdata()?;
+    
+                data.old_version = if let Ok(path) = get_ncm_install_path() {
+                    path.join("cloudmusicn.exe").exists()
+                } else {
+                    false
+                };
+    
+                process::Command::new(get_ncm_install_path()?.join("cloudmusic.exe"))
+                .current_dir(get_ncm_install_path()?)
+                .spawn()?;
+                anyhow::Ok(())
             };
-
-            process::Command::new(format!(
-                "{}/cloudmusic.exe",
-                get_ncm_install_path().unwrap()
-            ))
-            .current_dir(get_ncm_install_path().unwrap())
-            .spawn();
+            ins().unwrap();
         })
         .padding(5.0);
 
     let button_set_path = Button::new("修改数据地址为 C:/betterncm")
-        .on_click(|_ctx, data, _env| {
+        .on_click(|_ctx, _data, _env| {
             let hkcu = RegKey::predef(HKEY_CURRENT_USER);
             let (env, _) = hkcu.create_subkey("Environment").unwrap();
-            env.set_value("BETTERNCM_PROFILE", &"C:\\betterncm").unwrap();
+            env.set_value("BETTERNCM_PROFILE", &"C:\\betterncm")
+                .unwrap();
 
             let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
-            let (env, _) = hklm.create_subkey("System\\CurrentControlSet\\Control\\Session Manager\\Environment").unwrap();
-            env.set_value("BETTERNCM_PROFILE", &"C:\\betterncm").unwrap();
+            let (env, _) = hklm
+                .create_subkey("System\\CurrentControlSet\\Control\\Session Manager\\Environment")
+                .unwrap();
+            env.set_value("BETTERNCM_PROFILE", &"C:\\betterncm")
+                .unwrap();
         })
         .padding(5.0);
 
@@ -404,12 +343,16 @@ fn ui_builder() -> impl Widget<AppData> {
         .with_child(latest_version_label)
         .with_child(install_path_label)
         .with_child(local_version_label)
+        .with_child(Label::new(format!(
+            "{:#?} {:#?}",
+            get_ncm_install_path(),
+            get_ncm_version()
+        )))
         .with_child(
             Flex::row()
                 .with_child(button_install)
                 .with_child(button_uninstall)
-                .with_child(button_uninstall_old)
-                ,
+                .with_child(button_uninstall_old),
         )
         .with_child(button_set_path)
         .with_child(progress_bar)
@@ -428,10 +371,9 @@ async fn download_file(url: &String, path: &String, event_sink: druid::ExtEventS
     use std::io::Write;
 
     use futures_util::StreamExt;
-    use reqwest::Client;
 
     let client = reqwest::Client::new();
-    let mut res = client
+    let res = client
         .get(url)
         .header(
             "User-Agent",
