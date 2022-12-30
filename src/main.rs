@@ -95,7 +95,7 @@ async fn main() -> Result<()> {
             .get("https://gitee.com/microblock/better-ncm-v2-data/raw/master/betterncm/betterncm.json")
             .header(
                 "User-Agent",
-                format!("BetterNCM Installer"),
+                "BetterNCM Installer",
             )
             .send()
             .await
@@ -107,9 +107,9 @@ async fn main() -> Result<()> {
         let releases: Value = serde_json::from_str(releases.as_str()).unwrap();
 
         event_sink.add_idle_callback(move |data: &mut AppData| {
-            (*data).latest_version =
+            data.latest_version =
                 Version::parse(releases["versions"][0]["version"].as_str().unwrap()).ok();
-            (*data).latest_download_url = Some(
+            data.latest_download_url = Some(
                 releases["versions"][0]["file"]
                     .as_str()
                     .unwrap()
@@ -158,7 +158,7 @@ fn ui_builder() -> impl Widget<AppData> {
         .with_child(Label::new("Installer版本"))
         .with_child(
             Label::new(|data: &AppData, _env: &_| -> String {
-                format!("{}", data.installer_version.to_string())
+                data.installer_version.to_string()
             })
             .with_font(
                 FontDescriptor::default()
@@ -170,7 +170,7 @@ fn ui_builder() -> impl Widget<AppData> {
     let latest_version_label = Flex::row().with_child(Label::new("最新版本")).with_child(
         Label::new(|data: &AppData, _env: &_| -> String {
             match &data.latest_version {
-                Some(version) => format!("{}", version.to_string()),
+                Some(version) => version.to_string(),
                 None => String::from("获取中..."),
             }
         })
@@ -232,7 +232,7 @@ fn ui_builder() -> impl Widget<AppData> {
                     .unwrap();
 
                 event_sink_getvers.add_idle_callback(move |data: &mut AppData| {
-                    (*data).new_version = if let Ok(path) = get_ncm_install_path() {
+                    data.new_version = if let Ok(path) = get_ncm_install_path() {
                         path.join("msimg32.dll").exists()
                     } else {
                         false
@@ -362,9 +362,9 @@ fn ui_builder() -> impl Widget<AppData> {
 }
 
 async fn download_file(url: &String, path: &String, event_sink: druid::ExtEventSink) {
-    let tip_str = format!("正在下载: {}", path).to_string();
+    let tip_str = format!("正在下载: {}", path);
     event_sink.add_idle_callback(move |data: &mut AppData| {
-        (*data).tips_string = tip_str;
+        data.tips_string = tip_str;
     });
     use std::cmp::min;
     use std::fs::File;
@@ -396,15 +396,15 @@ async fn download_file(url: &String, path: &String, event_sink: druid::ExtEventS
 
     while let Some(item) = stream.next().await {
         let chunk = item
-            .or(Err(format!("Error while downloading file")))
+            .or(Err("Error while downloading file"))
             .unwrap();
         file.write_all(&chunk)
-            .or(Err(format!("Error while writing to file")))
+            .or(Err("Error while writing to file"))
             .unwrap();
         let new = min(downloaded + (chunk.len() as u64), total_size);
         downloaded = new;
         event_sink.add_idle_callback(move |data: &mut AppData| {
-            (*data).progress = (downloaded as f64) / (total_size as f64);
+            data.progress = (downloaded as f64) / (total_size as f64);
         });
         let tip_str = format!(
             "正在下载: {} ({}/100)",
@@ -413,11 +413,11 @@ async fn download_file(url: &String, path: &String, event_sink: druid::ExtEventS
         )
         .to_string();
         event_sink.add_idle_callback(move |data: &mut AppData| {
-            (*data).tips_string = tip_str;
+            data.tips_string = tip_str;
         });
     }
     event_sink.add_idle_callback(move |data: &mut AppData| {
-        (*data).tips_string = "".to_string();
-        (*data).progress = 0.;
+        data.tips_string = "".to_string();
+        data.progress = 0.;
     });
 }
