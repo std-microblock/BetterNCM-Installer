@@ -1,0 +1,25 @@
+[package]
+name = "scl-gui-widgets"
+version = "1.0.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+scl-gui-animation = { path = "../scl-gui-animation" }
+scl-macro = { path = "../scl-macro" }
+
+druid = { git = "https://github.com/linebender/druid.git", features = ["im", "serde", "raw-win-handle"] }
+window-shadows = "*"
+window-vibrancy = "*"
+raw-window-handle-5 = { package = "raw-window-handle", version = "0.5.0" }
+serde = { version = "1.0", features = ["derive"] }
+tracing = "*"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc = "*"
+cocoa = "*"
+libc = "*"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+winapi = { version = "*", features = ["processthreadsapi", "winuser", "libloaderapi"] }

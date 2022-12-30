@@ -1,0 +1,18 @@
+[package]
+name = "scl-macro"
+version = "0.1.1"
+edition = "2021"
+description = "Some useful macros can be used in scl coding"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+proc-macro = true
+
+[dependencies]
+quote = "^1.0"
+syn = "^1.0"
+
+[dev-dependencies]
+druid = { git = "https://github.com/linebender/druid.git", features = ["im", "serde", "raw-win-handle"] }
+serde = { version = "1.0", features = ["derive"] }

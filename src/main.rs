@@ -9,12 +9,15 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::process;
 use std::process::Command;
+use std::time::Duration;
 
+use anyhow::Context;
 use anyhow::Result;
-use druid::widget::{Button, Flex, Label, ProgressBar};
+use druid::commands::CLOSE_ALL_WINDOWS;
+use druid::widget::{Flex, Label, ProgressBar};
+use druid::Color;
 use druid::{
-    AppLauncher, Data, FontDescriptor, FontWeight, Lens, Widget, WidgetExt,
-    WindowDesc,
+    AppLauncher, Data, FontDescriptor, FontWeight, Lens, Widget, WidgetExt as _, WindowDesc,
 };
 use ncm_utils::get_ncm_version;
 use semver::Version;
@@ -22,13 +25,24 @@ use winreg::enums::HKEY_CURRENT_USER;
 use winreg::enums::HKEY_LOCAL_MACHINE;
 use winreg::RegKey;
 
+use scl_gui_widgets::{
+    widget_ext::WidgetExt,
+    widgets::{Button, WindowWidget, QUERY_CLOSE_WINDOW},
+};
+
 use crate::ncm_utils::get_ncm_install_path;
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum AdaptedVersionResult {
+    Version(Version),
+    NoAdaptedVersion,
+}
 
 #[derive(Debug, Clone, Data, Lens)]
 struct AppData {
     progress: f64,
     #[data(eq)]
-    latest_version: Option<Version>,
+    latest_version: Option<AdaptedVersionResult>,
     old_version: bool,
     new_version: bool,
     #[data(eq)]
@@ -46,7 +60,7 @@ struct AppData {
 
 fn config_path() -> String {
     String::from(
-       dirs::home_dir()
+        dirs::home_dir()
             .unwrap()
             .as_os_str()
             .to_str()
@@ -59,9 +73,10 @@ async fn main() -> Result<()> {
     let main_window = WindowDesc::new(ui_builder())
         .window_size((400., 310.))
         .resizable(false)
+        .show_titlebar(false)
         .title("BetterNCM Installer");
 
-    let data = AppData {
+    let mut data = AppData {
         progress: 0.,
         latest_version: None,
         old_version: if let Ok(path) = get_ncm_install_path() {
@@ -84,41 +99,75 @@ async fn main() -> Result<()> {
         ncm_version: get_ncm_version().ok(),
         tips_string: String::new(),
     };
+    if let Some(v) = &data.ncm_version {
+        if v < &Version::new(2, 10, 2) {
+            data.tips_string = "您的网易云版本太低，请更新".to_string();
+        }
+    }
     let launcher = AppLauncher::with_window(main_window);
 
     let event_sink = launcher.get_external_handle();
 
+    let ncm_version_ = data.ncm_version.clone();
     tokio::spawn(async move {
-        use serde_json::Value;
-        let client = reqwest::Client::new();
-        let releases = client
-            .get("https://gitee.com/microblock/better-ncm-v2-data/raw/master/betterncm/betterncm.json")
-            .header(
-                "User-Agent",
-                "BetterNCM Installer",
-            )
-            .send()
-            .await
-            .unwrap()
-            .text()
-            .await
-            .unwrap();
+        let ins = async {
+            if let Some(ncm_ver) = ncm_version_ {
+                use serde_json::Value;
+                let client = reqwest::Client::new();
+                let releases = client
+                .get("https://gitee.com/microblock/better-ncm-v2-data/raw/master/betterncm/betterncm1.json")
+                .header(
+                    "User-Agent",
+                    "BetterNCM Installer",
+                )
+                .send()
+                .await?
+                .text()
+                .await?;
 
-        let releases: Value = serde_json::from_str(releases.as_str()).unwrap();
+                let releases: Value = serde_json::from_str(releases.as_str()).unwrap();
 
-        event_sink.add_idle_callback(move |data: &mut AppData| {
-            data.latest_version =
-                Version::parse(releases["versions"][0]["version"].as_str().unwrap()).ok();
-            data.latest_download_url = Some(
-                releases["versions"][0]["file"]
-                    .as_str()
-                    .unwrap()
-                    .to_string(),
-            );
-        });
+                let adapted_versions = releases["versions"]
+                    .as_object()
+                    .context("Invalid JSON")?
+                    .clone();
+                for (ref version_req, ref val) in adapted_versions.iter() {
+                    if semver::VersionReq::parse(version_req)
+                        .context("Failed to parse version req")?
+                        .matches(&ncm_ver)
+                    {
+                        let latest_version = Some(AdaptedVersionResult::Version(
+                            Version::parse(val["version"].clone().as_str().unwrap().clone())
+                                .unwrap(),
+                        ));
+                        let latest_url = Some(val["url"].clone().as_str().unwrap().to_string());
+
+                        event_sink.add_idle_callback(move |data: &mut AppData| {
+                            data.latest_version = latest_version;
+                            data.latest_download_url = latest_url;
+                        });
+                        return anyhow::Ok(());
+                    }
+                }
+            }
+
+            event_sink.add_idle_callback(move |data: &mut AppData| {
+                data.latest_version = Some(AdaptedVersionResult::NoAdaptedVersion);
+            });
+            anyhow::Ok(())
+        };
+        ins.await.unwrap();
     });
 
-    launcher.log_to_console().launch(data)?;
+    launcher
+        .log_to_console()
+        .configure_env(|env, _| {
+            scl_gui_widgets::theme::color::set_color_to_env(
+                env,
+                scl_gui_widgets::theme::color::Theme::Dark,
+            );
+        })
+        .launch(data)?;
     Ok(())
 }
 
@@ -145,41 +194,39 @@ fn set_noproxy_localdata() -> anyhow::Result<()> {
 }
 
 fn ui_builder() -> impl Widget<AppData> {
-    let title = Label::new(String::from("BetterNCM Installer"))
-        .with_font(
-            FontDescriptor::default()
-                .with_size(30.)
-                .with_weight(FontWeight::BOLD),
-        )
-        .padding(5.0)
-        .center();
+    let title = Label::new("BetterNCM Installer".to_string()).with_font(
+        FontDescriptor::default()
+            .with_size(20.)
+            .with_weight(FontWeight::BOLD),
+    );
 
     let installer_version_label = Flex::row()
-        .with_child(Label::new("Installer版本"))
+        .with_child(Label::new("BetterNCM Installer 版本: ").with_text_color(Color::grey(0.7)))
+        .with_child(
+            Label::new(|data: &AppData, _env: &_| -> String { data.installer_version.to_string() })
+                .with_font(
+                    FontDescriptor::default()
+                        .with_size(17.)
+                        .with_weight(FontWeight::SEMI_BOLD),
+                ),
+        );
+
+    let latest_version_label = Flex::row()
+        .with_child(Label::new("适配 BetterNCM 版本: ").with_text_color(Color::grey(0.7)))
         .with_child(
             Label::new(|data: &AppData, _env: &_| -> String {
-                data.installer_version.to_string()
+                match &data.latest_version {
+                    Some(AdaptedVersionResult::Version(version)) => version.to_string(),
+                    Some(AdaptedVersionResult::NoAdaptedVersion) => "未适配".to_string(),
+                    None => String::from("获取中..."),
+                }
             })
             .with_font(
                 FontDescriptor::default()
-                    .with_size(20.)
+                    .with_size(17.)
                     .with_weight(FontWeight::SEMI_BOLD),
             ),
         );
-
-    let latest_version_label = Flex::row().with_child(Label::new("最新版本")).with_child(
-        Label::new(|data: &AppData, _env: &_| -> String {
-            match &data.latest_version {
-                Some(version) => version.to_string(),
-                None => String::from("获取中..."),
-            }
-        })
-        .with_font(
-            FontDescriptor::default()
-                .with_size(20.)
-                .with_weight(FontWeight::SEMI_BOLD),
-        ),
-    );
 
     let local_version_label = Flex::row().with_child(
         Label::new(|data: &AppData, _env: &_| -> String {
@@ -190,13 +237,13 @@ fn ui_builder() -> impl Widget<AppData> {
         })
         .with_font(
             FontDescriptor::default()
-                .with_size(20.)
+                .with_size(17.)
                 .with_weight(FontWeight::SEMI_BOLD),
         ),
     );
 
     let install_path_label = Flex::row()
-        .with_child(Label::new("网易云版本："))
+        .with_child(Label::new("网易云版本: ").with_text_color(Color::grey(0.7)))
         .with_child(
             Label::new(|data: &AppData, _env: &_| -> String {
                 match &data.ncm_version {
@@ -206,26 +253,31 @@ fn ui_builder() -> impl Widget<AppData> {
             })
             .with_font(
                 FontDescriptor::default()
-                    .with_size(10.)
-                    .with_weight(FontWeight::THIN),
+                    .with_size(17.)
+                    .with_weight(FontWeight::SEMI_BOLD),
             ),
         );
 
     let button_install = Button::new("安装")
         .disabled_if(|data: &AppData, _env: &_| {
-            data.latest_version.is_none() || data.old_version || data.new_version
+            data.latest_version.is_none()
+                || data.latest_version == Some(AdaptedVersionResult::NoAdaptedVersion)
+                || data.old_version
+                || data.new_version
         })
         .on_click(|ctx, data, _env| {
             let event_sink = ctx.get_external_handle();
             let event_sink_getvers = ctx.get_external_handle();
             let url: String = data.latest_download_url.as_ref().unwrap().clone();
             tokio::spawn(async move {
-                tokio::fs::remove_file("betterncm.dll").await?;
+                let _ = tokio::fs::remove_file("betterncm.dll").await;
                 download_file(&url, &"betterncm.dll".to_string(), event_sink).await;
                 Command::new("taskkill.exe")
                     .args(["/f", "/im", "cloudmusic.exe"])
                     .spawn()?
                     .wait()?;
+
+                tokio::time::sleep(Duration::from_millis(300)).await;
 
                 tokio::fs::copy("betterncm.dll", get_ncm_install_path()?.join("msimg32.dll"))
                     .await
@@ -244,13 +296,52 @@ fn ui_builder() -> impl Widget<AppData> {
                     .spawn()?;
                 anyhow::Ok(())
             });
+        });
+
+    let button_reinstall = Button::new("重装/更新")
+        .disabled_if(|data: &AppData, _env: &_| {
+            data.latest_version.is_none()
+                || data.latest_version == Some(AdaptedVersionResult::NoAdaptedVersion)
+                || data.old_version
+                || !data.new_version
         })
-        .padding(5.0);
+        .on_click(|ctx, data, _env| {
+            let event_sink = ctx.get_external_handle();
+            let event_sink_getvers = ctx.get_external_handle();
+            let url: String = data.latest_download_url.as_ref().unwrap().clone();
+            tokio::spawn(async move {
+                let _ = tokio::fs::remove_file("betterncm.dll").await;
+                download_file(&url, &"betterncm.dll".to_string(), event_sink).await;
+                Command::new("taskkill.exe")
+                    .args(["/f", "/im", "cloudmusic.exe"])
+                    .spawn()?
+                    .wait()?;
+
+                tokio::time::sleep(Duration::from_millis(300)).await;
+
+                tokio::fs::copy("betterncm.dll", get_ncm_install_path()?.join("msimg32.dll"))
+                    .await
+                    .unwrap();
+
+                event_sink_getvers.add_idle_callback(move |data: &mut AppData| {
+                    data.new_version = if let Ok(path) = get_ncm_install_path() {
+                        path.join("msimg32.dll").exists()
+                    } else {
+                        false
+                    };
+                });
+
+                Command::new(get_ncm_install_path()?.join("cloudmusic.exe"))
+                    .current_dir(get_ncm_install_path()?)
+                    .spawn()?;
+                anyhow::Ok(())
+            });
+        });
 
     let button_uninstall = Button::new("卸载")
         .disabled_if(|data: &AppData, _env: &_| data.old_version || !data.new_version)
         .on_click(|_ctx, data, _env| {
-            let mut ins = ||{
+            let mut ins = || {
                 Command::new("taskkill.exe")
                     .args(["/f", "/im", "cloudmusic.exe"])
                     .spawn()?
@@ -261,28 +352,24 @@ fn ui_builder() -> impl Widget<AppData> {
                     .wait()?;
                 fs::remove_file(get_ncm_install_path()?.join("msimg32.dll"))?;
 
-                set_noproxy_localdata()?;
-                fs::remove_file(get_ncm_install_path()?.join("msimg32.dll"))?;
-
                 data.new_version = if let Ok(path) = get_ncm_install_path() {
                     path.join("msimg32.dll").exists()
                 } else {
                     false
                 };
 
-                process::Command::new( get_ncm_install_path()?.join("cloudmusic.exe"))
+                process::Command::new(get_ncm_install_path()?.join("cloudmusic.exe"))
                     .current_dir(get_ncm_install_path()?)
                     .spawn()?;
                 anyhow::Ok(())
             };
             ins().unwrap();
-        })
-        .padding(5.0);
+        });
 
     let button_uninstall_old = Button::new("卸载老版本")
         .disabled_if(|data: &AppData, _env: &_| !data.old_version)
         .on_click(|_ctx, data, _env| {
-            let mut ins=||{
+            let mut ins = || {
                 fs::remove_dir_all(config_path())?;
                 Command::new("taskkill.exe")
                     .args(["/f", "/im", "cloudmusic.exe"])
@@ -293,28 +380,27 @@ fn ui_builder() -> impl Widget<AppData> {
                     .spawn()?
                     .wait()?;
                 fs::remove_file(get_ncm_install_path()?.join("cloudmusic.exe"))?;
-    
+
                 fs::rename(
                     get_ncm_install_path()?.join("cloudmusicn.exe"),
-                    get_ncm_install_path()?.join("cloudmusic.exe")
+                    get_ncm_install_path()?.join("cloudmusic.exe"),
                 )?;
-    
+
                 set_noproxy_localdata()?;
-    
+
                 data.old_version = if let Ok(path) = get_ncm_install_path() {
                     path.join("cloudmusicn.exe").exists()
                 } else {
                     false
                 };
-    
+
                 process::Command::new(get_ncm_install_path()?.join("cloudmusic.exe"))
-                .current_dir(get_ncm_install_path()?)
-                .spawn()?;
+                    .current_dir(get_ncm_install_path()?)
+                    .spawn()?;
                 anyhow::Ok(())
             };
             ins().unwrap();
-        })
-        .padding(5.0);
+        });
 
     let button_set_path = Button::new("修改数据地址为 C:/betterncm")
         .on_click(|_ctx, _data, _env| {
@@ -330,35 +416,57 @@ fn ui_builder() -> impl Widget<AppData> {
             env.set_value("BETTERNCM_PROFILE", &"C:\\betterncm")
                 .unwrap();
         })
-        .padding(5.0);
+        .disabled_if(|_data, _env| {
+            let get_profile = || {
+                let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+                let (env, _) = hkcu.create_subkey("Environment")?;
+                let profile: String = env.get_value("BETTERNCM_PROFILE")?;
+                Ok(profile)
+            };
+            let profile: anyhow::Result<String> = get_profile();
 
-    let progress_bar = ProgressBar::new()
-        .lens(AppData::progress)
-        .padding((20., 0.))
-        .expand_width();
+            if let Ok(path) = profile {
+                path != "C:\\betterncm".to_string()
+            } else {
+                true
+            }
+        });
 
-    Flex::column()
-        .with_child(title)
-        .with_child(installer_version_label)
-        .with_child(latest_version_label)
-        .with_child(install_path_label)
-        .with_child(local_version_label)
-        .with_child(Label::new(format!(
-            "{:#?} {:#?}",
-            get_ncm_install_path(),
-            get_ncm_version()
-        )))
-        .with_child(
-            Flex::row()
-                .with_child(button_install)
-                .with_child(button_uninstall)
-                .with_child(button_uninstall_old),
-        )
-        .with_child(button_set_path)
-        .with_child(progress_bar)
-        .with_child(Label::new(|data: &AppData, _env: &_| -> String {
-            data.tips_string.clone()
-        }))
+    let progress_bar = ProgressBar::new().lens(AppData::progress).expand_width();
+
+    WindowWidget::new(
+        "BetterNCM Installer",
+        Flex::column()
+            .with_child(title)
+            .with_child(installer_version_label)
+            .with_child(latest_version_label)
+            .with_child(install_path_label)
+            .with_child(local_version_label)
+            .with_spacer(5.)
+            .with_child(Label::new(|data: &AppData, _env: &_| -> String {
+                data.tips_string.clone()
+            }))
+            .with_flex_spacer(1.)
+            .with_child(
+                Flex::row()
+                    .with_flex_child(button_install.expand_width(), 1.)
+                    .with_spacer(5.)
+                    .with_flex_child(button_reinstall.expand_width(), 1.)
+                    .with_spacer(5.)
+                    .with_flex_child(button_uninstall.expand_width(), 1.)
+                    .with_spacer(5.)
+                    .with_flex_child(button_uninstall_old.expand_width(), 1.),
+            )
+            .with_spacer(5.)
+            .with_child(button_set_path.expand_width())
+            .with_spacer(5.)
+            .with_child(progress_bar)
+            .cross_axis_alignment(druid::widget::CrossAxisAlignment::Start)
+            .padding(10.),
+    )
+    .on_notify(QUERY_CLOSE_WINDOW, |ctx, _, _| {
+        ctx.submit_command(CLOSE_ALL_WINDOWS);
+    })
 }
 
 async fn download_file(url: &String, path: &String, event_sink: druid::ExtEventSink) {
@@ -395,9 +503,7 @@ async fn download_file(url: &String, path: &String, event_sink: druid::ExtEventS
     let mut stream = res.bytes_stream();
 
     while let Some(item) = stream.next().await {
-        let chunk = item
-            .or(Err("Error while downloading file"))
-            .unwrap();
+        let chunk = item.or(Err("Error while downloading file")).unwrap();
         file.write_all(&chunk)
             .or(Err("Error while writing to file"))
             .unwrap();

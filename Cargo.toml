@@ -10,10 +10,15 @@ build = "build.rs"
 winres = "0.1"
 
 [dependencies]
-druid = { git = "https://github.com/linebender/druid" }
+druid = { git = "https://github.com/linebender/druid.git", features = [
+    "im",
+    "serde",
+    "raw-win-handle",
+] }
 futures = "0.3"
 reqwest = { version = "*", features = ["stream"] }
 tokio = { version = "*", features = ["full"] }
+scl-gui-widgets = { path = "./scl-gui-widgets" }
 serde_json = "1.0.79"
 futures-util = "0.3.14"
 winreg = "0.10.1"
