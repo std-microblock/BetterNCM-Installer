@@ -22,3 +22,8 @@ jobs:
     - name: Build
       run: 
         cargo build --verbose --release
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v3.1.1
+      with:
+        name: BetterNCM-Installer
+        path: ${{ github.workspace }}/target/release/betterncm_installer.exe
