@@ -275,7 +275,7 @@ fn ui_builder() -> impl Widget<AppData> {
                 .add_idle_callback(|data: &mut AppData| {
                     let ncm_version_ = data.ncm_version.clone();
                     tokio::spawn(async {
-                        get_adapted_betterncm_version(ncm_version_, sink, "versions".to_string())
+                        get_adapted_betterncm_version(ncm_version_, sink, "test".to_string())
                             .await
                             .unwrap();
                     });
