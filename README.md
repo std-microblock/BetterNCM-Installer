@@ -9,7 +9,7 @@
 
 ![image](https://user-images.githubusercontent.com/66859419/204120743-a528b624-d016-4f6f-a0d7-e769cdd2dd74.png)
 
-![Installer](installer.png)
+![Installer](https://user-images.githubusercontent.com/66859419/210129835-11ceea16-f5dd-43b7-ba83-625a3c4d920e.png)
 
 # 手动安装流程
 1. 从BetterNCM仓库下载最新版`BetterNCMII.dll`
