@@ -31,8 +31,9 @@ jobs:
         name: BetterNCM-Installer
         path: ${{ github.workspace }}/target/release/betterncm_installer.exe
     - name: Upload to Release Action
+      if: ${{ github.event_name == 'release' }}
       uses: Shopify/upload-to-release@v1.0.1
       with:
-        name: Windows
+        name: betterncm_installer.exe
         path: ${{ github.workspace }}/target/release/betterncm_installer.exe
         repo-token: ${{ secrets.GITHUB_TOKEN }}
