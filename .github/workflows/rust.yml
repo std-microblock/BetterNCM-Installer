@@ -1,6 +1,9 @@
 name: Rust
 
 on:
+  release:
+    types:
+    - created
   push:
     branches: [ main ]
   pull_request:
@@ -27,3 +30,9 @@ jobs:
       with:
         name: BetterNCM-Installer
         path: ${{ github.workspace }}/target/release/betterncm_installer.exe
+    - name: Upload to Release Action
+      uses: Shopify/upload-to-release@v1.0.1
+      with:
+        name: Windows
+        path: ${{ github.workspace }}/target/release/betterncm_installer.exe
+        repo-token: ${{ secrets.GITHUB_TOKEN }}
