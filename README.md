@@ -3,7 +3,6 @@
 <h3 align="center">PC版网易云客户端插件管理器</h3>
 
 一键安装[BetterNCM V2](https://github.com/MicroCBer/BetterNCM)
-最新测试兼容版本：`2.10.3`
 
 **网易云版本必须`>=2.10.2`**
 
