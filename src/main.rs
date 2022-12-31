@@ -14,8 +14,10 @@ use std::time::Duration;
 use anyhow::Context;
 use anyhow::Result;
 use druid::commands::CLOSE_ALL_WINDOWS;
+use druid::widget::Checkbox;
 use druid::widget::{Flex, Label, ProgressBar};
 use druid::Color;
+use druid::ExtEventSink;
 use druid::{
     AppLauncher, Data, FontDescriptor, FontWeight, Lens, Widget, WidgetExt as _, WindowDesc,
 };
@@ -41,6 +43,7 @@ pub enum AdaptedVersionResult {
 #[derive(Debug, Clone, Data, Lens)]
 struct AppData {
     progress: f64,
+    prerelease: bool,
     #[data(eq)]
     latest_version: Option<AdaptedVersionResult>,
     old_version: bool,
@@ -68,6 +71,56 @@ fn config_path() -> String {
     ) + "\\betterncm\\"
 }
 
+async fn get_adapted_betterncm_version(
+    ncm_version_: Option<Version>,
+    event_sink: ExtEventSink,
+    channel: String,
+) -> Result<()> {
+    if let Some(ncm_ver) = ncm_version_ {
+        use serde_json::Value;
+        let client = reqwest::Client::new();
+        let releases = client
+        .get("https://gitee.com/microblock/better-ncm-v2-data/raw/master/betterncm/betterncm1.json")
+        .header(
+            "User-Agent",
+            "BetterNCM Installer",
+        )
+        .send()
+        .await?
+        .text()
+        .await?;
+
+        let releases: Value = serde_json::from_str(releases.as_str()).unwrap();
+
+        let adapted_versions = releases[channel]
+            .as_object()
+            .context("Invalid JSON")?
+            .clone();
+        for (ref version_req, ref val) in adapted_versions.iter() {
+            if semver::VersionReq::parse(version_req)
+                .context("Failed to parse version req")?
+                .matches(&ncm_ver)
+            {
+                let latest_version = Some(AdaptedVersionResult::Version(
+                    Version::parse(val["version"].clone().as_str().unwrap().clone()).unwrap(),
+                ));
+                let latest_url = Some(val["url"].clone().as_str().unwrap().to_string());
+
+                event_sink.add_idle_callback(move |data: &mut AppData| {
+                    data.latest_version = latest_version;
+                    data.latest_download_url = latest_url;
+                });
+                return anyhow::Ok(());
+            }
+        }
+    }
+
+    event_sink.add_idle_callback(move |data: &mut AppData| {
+        data.latest_version = Some(AdaptedVersionResult::NoAdaptedVersion);
+    });
+    anyhow::Ok(())
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let main_window = WindowDesc::new(ui_builder())
@@ -77,6 +130,7 @@ async fn main() -> Result<()> {
         .title("BetterNCM Installer");
 
     let mut data = AppData {
+        prerelease: false,
         progress: 0.,
         latest_version: None,
         old_version: if let Ok(path) = get_ncm_install_path() {
@@ -110,53 +164,9 @@ async fn main() -> Result<()> {
 
     let ncm_version_ = data.ncm_version.clone();
     tokio::spawn(async move {
-        let ins = async {
-            if let Some(ncm_ver) = ncm_version_ {
-                use serde_json::Value;
-                let client = reqwest::Client::new();
-                let releases = client
-                .get("https://gitee.com/microblock/better-ncm-v2-data/raw/master/betterncm/betterncm1.json")
-                .header(
-                    "User-Agent",
-                    "BetterNCM Installer",
-                )
-                .send()
-                .await?
-                .text()
-                .await?;
-
-                let releases: Value = serde_json::from_str(releases.as_str()).unwrap();
-
-                let adapted_versions = releases["versions"]
-                    .as_object()
-                    .context("Invalid JSON")?
-                    .clone();
-                for (ref version_req, ref val) in adapted_versions.iter() {
-                    if semver::VersionReq::parse(version_req)
-                        .context("Failed to parse version req")?
-                        .matches(&ncm_ver)
-                    {
-                        let latest_version = Some(AdaptedVersionResult::Version(
-                            Version::parse(val["version"].clone().as_str().unwrap().clone())
-                                .unwrap(),
-                        ));
-                        let latest_url = Some(val["url"].clone().as_str().unwrap().to_string());
-
-                        event_sink.add_idle_callback(move |data: &mut AppData| {
-                            data.latest_version = latest_version;
-                            data.latest_download_url = latest_url;
-                        });
-                        return anyhow::Ok(());
-                    }
-                }
-            }
-
-            event_sink.add_idle_callback(move |data: &mut AppData| {
-                data.latest_version = Some(AdaptedVersionResult::NoAdaptedVersion);
-            });
-            anyhow::Ok(())
-        };
-        ins.await.unwrap();
+        get_adapted_betterncm_version(ncm_version_, event_sink, "versions".to_string())
+            .await
+            .unwrap();
     });
 
     launcher
@@ -257,6 +267,21 @@ fn ui_builder() -> impl Widget<AppData> {
                     .with_weight(FontWeight::SEMI_BOLD),
             ),
         );
+
+    let checker_prerelease = Checkbox::new("测试通道")
+        .on_change(|ctx, old, new, env| {
+            let sink = ctx.get_external_handle();
+            ctx.get_external_handle()
+                .add_idle_callback(|data: &mut AppData| {
+                    let ncm_version_ = data.ncm_version.clone();
+                    tokio::spawn(async {
+                        get_adapted_betterncm_version(ncm_version_, sink, "versions".to_string())
+                            .await
+                            .unwrap();
+                    });
+                });
+        })
+        .lens(AppData::prerelease);
 
     let button_install = Button::new("安装")
         .disabled_if(|data: &AppData, _env: &_| {
@@ -447,6 +472,7 @@ fn ui_builder() -> impl Widget<AppData> {
                 data.tips_string.clone()
             }))
             .with_flex_spacer(1.)
+            .with_child(checker_prerelease)
             .with_child(
                 Flex::row()
                     .with_flex_child(button_install.expand_width(), 1.)
