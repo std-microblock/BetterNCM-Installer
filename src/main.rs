@@ -271,14 +271,15 @@ fn ui_builder() -> impl Widget<AppData> {
     let checker_prerelease = Checkbox::new("测试通道")
         .on_change(|ctx, old, new, env| {
             let sink = ctx.get_external_handle();
+            let channel = if *new { "test" } else { "versions" };
             ctx.get_external_handle()
                 .add_idle_callback(|data: &mut AppData| {
                     let ncm_version_ = data.ncm_version.clone();
-                    tokio::spawn(async {
-                        get_adapted_betterncm_version(ncm_version_, sink, "test".to_string())
-                            .await
-                            .unwrap();
-                    });
+                        tokio::spawn(async {
+                            get_adapted_betterncm_version(ncm_version_, sink, channel.to_string())
+                                .await
+                                .unwrap();
+                        });
                 });
         })
         .lens(AppData::prerelease);
@@ -473,6 +474,7 @@ fn ui_builder() -> impl Widget<AppData> {
             }))
             .with_flex_spacer(1.)
             .with_child(checker_prerelease)
+            .with_spacer(5.)
             .with_child(
                 Flex::row()
                     .with_flex_child(button_install.expand_width(), 1.)
