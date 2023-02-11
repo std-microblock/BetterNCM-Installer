@@ -71,38 +71,34 @@ fn config_path() -> String {
     ) + "\\betterncm\\"
 }
 
-async fn get_adapted_betterncm_version(
+fn get_adapted_betterncm_version(
     ncm_version_: Option<Version>,
     event_sink: ExtEventSink,
     channel: String,
-) -> Result<()> {
+) -> anyhow::Result<(), Box<dyn std::error::Error>> {
     if let Some(ncm_ver) = ncm_version_ {
         use serde_json::Value;
-        let client = reqwest::Client::new();
-        let releases = client
-        .get("https://gitee.com/microblock/better-ncm-v2-data/raw/master/betterncm/betterncm1.json")
-        .header(
-            "User-Agent",
-            "BetterNCM Installer",
+        let releases = tinyget::get(
+            "https://gitee.com/microblock/better-ncm-v2-data/raw/master/betterncm/betterncm1.json",
         )
-        .send()
-        .await?
-        .text()
-        .await?;
+        .with_header("User-Agent", "BetterNCM Installer/1.0.3")
+        .send()?;
 
-        let releases: Value = serde_json::from_str(releases.as_str()).unwrap();
+        let releases = releases.as_str()?;
+
+        let releases: Value = serde_json::from_str(releases)?;
 
         let adapted_versions = releases[channel]
             .as_object()
             .context("Invalid JSON")?
             .clone();
-        for (ref version_req, ref val) in adapted_versions.iter() {
+        for (version_req, val) in adapted_versions.iter() {
             if semver::VersionReq::parse(version_req)
                 .context("Failed to parse version req")?
                 .matches(&ncm_ver)
             {
                 let latest_version = Some(AdaptedVersionResult::Version(
-                    Version::parse(val["version"].clone().as_str().unwrap().clone()).unwrap(),
+                    Version::parse(val["version"].to_owned().as_str().unwrap()).unwrap(),
                 ));
                 let latest_url = Some(val["url"].clone().as_str().unwrap().to_string());
 
@@ -110,7 +106,7 @@ async fn get_adapted_betterncm_version(
                     data.latest_version = latest_version;
                     data.latest_download_url = latest_url;
                 });
-                return anyhow::Ok(());
+                return Ok(());
             }
         }
     }
@@ -118,11 +114,11 @@ async fn get_adapted_betterncm_version(
     event_sink.add_idle_callback(move |data: &mut AppData| {
         data.latest_version = Some(AdaptedVersionResult::NoAdaptedVersion);
     });
-    anyhow::Ok(())
+
+    Ok(())
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
     let main_window = WindowDesc::new(ui_builder())
         .window_size((400., 310.))
         .resizable(false)
@@ -163,14 +159,12 @@ async fn main() -> Result<()> {
     let event_sink = launcher.get_external_handle();
 
     let ncm_version_ = data.ncm_version.clone();
-    tokio::spawn(async move {
-        get_adapted_betterncm_version(ncm_version_, event_sink, "versions".to_string())
-            .await
-            .unwrap();
+
+    std::thread::spawn(move || {
+        let _ = get_adapted_betterncm_version(ncm_version_, event_sink, "versions".to_string());
     });
 
     launcher
-        .log_to_console()
         .configure_env(|env, _| {
             scl_gui_widgets::theme::color::set_color_to_env(
                 env,
@@ -257,7 +251,7 @@ fn ui_builder() -> impl Widget<AppData> {
         .with_child(
             Label::new(|data: &AppData, _env: &_| -> String {
                 match &data.ncm_version {
-                    Some(ver) => format!("{}", ver),
+                    Some(ver) => format!("{ver}"),
                     None => "未安装".to_string(),
                 }
             })
@@ -269,17 +263,17 @@ fn ui_builder() -> impl Widget<AppData> {
         );
 
     let checker_prerelease = Checkbox::new("测试通道")
-        .on_change(|ctx, old, new, env| {
+        .on_change(|ctx, _old, new, _env| {
             let sink = ctx.get_external_handle();
             let channel = if *new { "test" } else { "versions" };
             ctx.get_external_handle()
-                .add_idle_callback(|data: &mut AppData| {
+                .add_idle_callback(move |data: &mut AppData| {
+                    data.latest_version = None;
                     let ncm_version_ = data.ncm_version.clone();
-                        tokio::spawn(async {
-                            get_adapted_betterncm_version(ncm_version_, sink, channel.to_string())
-                                .await
-                                .unwrap();
-                        });
+                    std::thread::spawn(move || {
+                        let _ =
+                            get_adapted_betterncm_version(ncm_version_, sink, channel.to_string());
+                    });
                 });
         })
         .lens(AppData::prerelease);
@@ -295,18 +289,17 @@ fn ui_builder() -> impl Widget<AppData> {
             let event_sink = ctx.get_external_handle();
             let event_sink_getvers = ctx.get_external_handle();
             let url: String = data.latest_download_url.as_ref().unwrap().clone();
-            tokio::spawn(async move {
-                let _ = tokio::fs::remove_file("betterncm.dll").await;
-                download_file(&url, &"betterncm.dll".to_string(), event_sink).await;
+            std::thread::spawn(move || {
+                let _ = std::fs::remove_file("betterncm.dll");
+                download_file(&url, "betterncm.dll", event_sink);
                 Command::new("taskkill.exe")
                     .args(["/f", "/im", "cloudmusic.exe"])
                     .spawn()?
                     .wait()?;
 
-                tokio::time::sleep(Duration::from_millis(300)).await;
+                std::thread::sleep(Duration::from_millis(300));
 
-                tokio::fs::copy("betterncm.dll", get_ncm_install_path()?.join("msimg32.dll"))
-                    .await
+                std::fs::copy("betterncm.dll", get_ncm_install_path()?.join("msimg32.dll"))
                     .unwrap();
 
                 event_sink_getvers.add_idle_callback(move |data: &mut AppData| {
@@ -335,18 +328,17 @@ fn ui_builder() -> impl Widget<AppData> {
             let event_sink = ctx.get_external_handle();
             let event_sink_getvers = ctx.get_external_handle();
             let url: String = data.latest_download_url.as_ref().unwrap().clone();
-            tokio::spawn(async move {
-                let _ = tokio::fs::remove_file("betterncm.dll").await;
-                download_file(&url, &"betterncm.dll".to_string(), event_sink).await;
+            std::thread::spawn(move || {
+                let _ = std::fs::remove_file("betterncm.dll");
+                download_file(&url, "betterncm.dll", event_sink);
                 Command::new("taskkill.exe")
                     .args(["/f", "/im", "cloudmusic.exe"])
                     .spawn()?
                     .wait()?;
 
-                tokio::time::sleep(Duration::from_millis(300)).await;
+                std::thread::sleep(Duration::from_millis(300));
 
-                tokio::fs::copy("betterncm.dll", get_ncm_install_path()?.join("msimg32.dll"))
-                    .await
+                std::fs::copy("betterncm.dll", get_ncm_install_path()?.join("msimg32.dll"))
                     .unwrap();
 
                 event_sink_getvers.add_idle_callback(move |data: &mut AppData| {
@@ -452,7 +444,7 @@ fn ui_builder() -> impl Widget<AppData> {
             let profile: anyhow::Result<String> = get_profile();
 
             if let Ok(path) = profile {
-                path != "C:\\betterncm".to_string()
+                path != *"C:\\betterncm"
             } else {
                 true
             }
@@ -497,61 +489,59 @@ fn ui_builder() -> impl Widget<AppData> {
     })
 }
 
-async fn download_file(url: &String, path: &String, event_sink: druid::ExtEventSink) {
-    let tip_str = format!("正在下载: {}", path);
+fn download_file(url: &str, path: &str, event_sink: druid::ExtEventSink) {
+    let tip_str = format!("正在下载: {path}");
     event_sink.add_idle_callback(move |data: &mut AppData| {
         data.tips_string = tip_str;
     });
-    use std::cmp::min;
     use std::fs::File;
     use std::io::Write;
 
-    use futures_util::StreamExt;
-
-    let client = reqwest::Client::new();
-    let res = client
-        .get(url)
-        .header(
+    let res = tinyget::get(url)
+        .with_header(
             "User-Agent",
-            format!("BetterNCM Installer {};", env!("CARGO_PKG_VERSION")),
+            &format!("BetterNCM Installer {};", env!("CARGO_PKG_VERSION")),
         )
-        .send()
-        .await
+        .send_lazy()
         .unwrap();
 
-    let total_size = res
-        .content_length()
-        .ok_or(format!("Failed to get content length from '{}'", &url))
-        .unwrap();
+    let file_size = res
+        .headers
+        .get("content-length")
+        .map(|x| x.as_str().parse::<usize>())
+        .unwrap_or(Ok(0))
+        .unwrap_or(0);
+
+    event_sink.add_idle_callback(move |data: &mut AppData| {
+        data.tips_string = "正在下载……".into();
+    });
 
     let mut file = File::create(path)
-        .or(Err(format!("Failed to create file '{}'", path)))
+        .or(Err(format!("Failed to create file '{path}'")))
         .unwrap();
-    let mut downloaded: u64 = 0;
-    let mut stream = res.bytes_stream();
 
-    while let Some(item) = stream.next().await {
-        let chunk = item.or(Err("Error while downloading file")).unwrap();
-        file.write_all(&chunk)
-            .or(Err("Error while writing to file"))
-            .unwrap();
-        let new = min(downloaded + (chunk.len() as u64), total_size);
-        downloaded = new;
-        event_sink.add_idle_callback(move |data: &mut AppData| {
-            data.progress = (downloaded as f64) / (total_size as f64);
-        });
-        let tip_str = format!(
-            "正在下载: {} ({}/100)",
-            path,
-            ((downloaded as f64) / (total_size as f64) * 100.).floor()
-        )
-        .to_string();
-        event_sink.add_idle_callback(move |data: &mut AppData| {
-            data.tips_string = tip_str;
-        });
+    let mut buf = Vec::with_capacity(file_size);
+    let mut tip_str = "正在下载……".to_string();
+    for data in res {
+        let (byte, length) = data.unwrap();
+        buf.reserve(length);
+        buf.push(byte);
+
+        let progress = buf.len() as f64 / file_size as f64;
+        let percent_progress = (progress * 100.).floor() as u32;
+        let new_tip_str = format!("正在下载：{path}（{percent_progress}%）");
+        if tip_str != new_tip_str {
+            tip_str = new_tip_str.to_owned();
+            event_sink.add_idle_callback(move |data: &mut AppData| {
+                data.tips_string = new_tip_str;
+                data.progress = progress;
+            });
+        }
     }
+
+    file.write_all(&buf).unwrap();
+
     event_sink.add_idle_callback(move |data: &mut AppData| {
         data.tips_string = "".to_string();
-        data.progress = 0.;
     });
 }

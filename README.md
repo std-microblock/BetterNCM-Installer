@@ -16,3 +16,8 @@
 
 # 插件库
 已在 BetterNCM 内置
+
+# 构建
+```bash
+cargo +nightly build --release -Z build-std=core,alloc,std,panic_abort -Z build-std-features=panic_immediate_abort --target i686-pc-windows-msvc
+```
