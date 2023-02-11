@@ -3,13 +3,13 @@
 #![feature(box_syntax)]
 
 mod ncm_utils;
-use std::env;
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process;
 use std::process::Command;
 use std::time::Duration;
+use std::{env, os::windows::process::CommandExt};
 
 use anyhow::Context;
 use anyhow::Result;
@@ -21,7 +21,7 @@ use druid::ExtEventSink;
 use druid::{
     AppLauncher, Data, FontDescriptor, FontWeight, Lens, Widget, WidgetExt as _, WindowDesc,
 };
-use ncm_utils::get_ncm_version;
+use ncm_utils::{get_ncm_version, is_vc_redist_14_x86_installed};
 use semver::Version;
 use winreg::enums::HKEY_CURRENT_USER;
 use winreg::enums::HKEY_LOCAL_MACHINE;
@@ -269,6 +269,7 @@ fn ui_builder() -> impl Widget<AppData> {
             ctx.get_external_handle()
                 .add_idle_callback(move |data: &mut AppData| {
                     data.latest_version = None;
+                    data.tips_string = "".into();
                     let ncm_version_ = data.ncm_version.clone();
                     std::thread::spawn(move || {
                         let _ =
@@ -287,13 +288,20 @@ fn ui_builder() -> impl Widget<AppData> {
         })
         .on_click(|ctx, data, _env| {
             let event_sink = ctx.get_external_handle();
-            let event_sink_getvers = ctx.get_external_handle();
             let url: String = data.latest_download_url.as_ref().unwrap().clone();
             std::thread::spawn(move || {
                 let _ = std::fs::remove_file("betterncm.dll");
-                download_file(&url, "betterncm.dll", event_sink);
+
+                download_file(&url, "betterncm.dll", event_sink.to_owned());
+                install_vc_redist_14_x86(event_sink.to_owned());
+
+                event_sink.add_idle_callback(move |data: &mut AppData| {
+                    data.tips_string = "正在安装 BetterNCM…".into();
+                });
+
                 Command::new("taskkill.exe")
                     .args(["/f", "/im", "cloudmusic.exe"])
+                    .creation_flags(0x08000000)
                     .spawn()?
                     .wait()?;
 
@@ -302,7 +310,8 @@ fn ui_builder() -> impl Widget<AppData> {
                 std::fs::copy("betterncm.dll", get_ncm_install_path()?.join("msimg32.dll"))
                     .unwrap();
 
-                event_sink_getvers.add_idle_callback(move |data: &mut AppData| {
+                event_sink.add_idle_callback(move |data: &mut AppData| {
+                    data.tips_string = "安装成功！".into();
                     data.new_version = if let Ok(path) = get_ncm_install_path() {
                         path.join("msimg32.dll").exists()
                     } else {
@@ -326,13 +335,20 @@ fn ui_builder() -> impl Widget<AppData> {
         })
         .on_click(|ctx, data, _env| {
             let event_sink = ctx.get_external_handle();
-            let event_sink_getvers = ctx.get_external_handle();
             let url: String = data.latest_download_url.as_ref().unwrap().clone();
             std::thread::spawn(move || {
                 let _ = std::fs::remove_file("betterncm.dll");
-                download_file(&url, "betterncm.dll", event_sink);
+
+                download_file(&url, "betterncm.dll", event_sink.to_owned());
+                install_vc_redist_14_x86(event_sink.to_owned());
+
+                event_sink.add_idle_callback(move |data: &mut AppData| {
+                    data.tips_string = "正在升级/重新安装 BetterNCM…".into();
+                });
+
                 Command::new("taskkill.exe")
                     .args(["/f", "/im", "cloudmusic.exe"])
+                    .creation_flags(0x08000000)
                     .spawn()?
                     .wait()?;
 
@@ -341,7 +357,8 @@ fn ui_builder() -> impl Widget<AppData> {
                 std::fs::copy("betterncm.dll", get_ncm_install_path()?.join("msimg32.dll"))
                     .unwrap();
 
-                event_sink_getvers.add_idle_callback(move |data: &mut AppData| {
+                event_sink.add_idle_callback(move |data: &mut AppData| {
+                    data.tips_string = "升级/重新安装成功！".into();
                     data.new_version = if let Ok(path) = get_ncm_install_path() {
                         path.join("msimg32.dll").exists()
                     } else {
@@ -358,30 +375,38 @@ fn ui_builder() -> impl Widget<AppData> {
 
     let button_uninstall = Button::new("卸载")
         .disabled_if(|data: &AppData, _env: &_| data.old_version || !data.new_version)
-        .on_click(|_ctx, data, _env| {
-            let mut ins = || {
+        .on_click(|ctx, _data, _env| {
+            let event_sink = ctx.get_external_handle();
+            std::thread::spawn(move || {
+                event_sink.add_idle_callback(move |data: &mut AppData| {
+                    data.tips_string = "正在卸载 BetterNCM…".into();
+                });
                 Command::new("taskkill.exe")
                     .args(["/f", "/im", "cloudmusic.exe"])
+                    .creation_flags(0x08000000)
                     .spawn()?
                     .wait()?;
                 Command::new("taskkill.exe")
                     .args(["/f", "/im", "cloudmusicn.exe"])
+                    .creation_flags(0x08000000)
                     .spawn()?
                     .wait()?;
                 fs::remove_file(get_ncm_install_path()?.join("msimg32.dll"))?;
 
-                data.new_version = if let Ok(path) = get_ncm_install_path() {
-                    path.join("msimg32.dll").exists()
-                } else {
-                    false
-                };
+                event_sink.add_idle_callback(move |data: &mut AppData| {
+                    data.new_version = if let Ok(path) = get_ncm_install_path() {
+                        path.join("msimg32.dll").exists()
+                    } else {
+                        false
+                    };
+                    data.tips_string = "卸载完成！".into();
+                });
 
                 process::Command::new(get_ncm_install_path()?.join("cloudmusic.exe"))
                     .current_dir(get_ncm_install_path()?)
                     .spawn()?;
                 anyhow::Ok(())
-            };
-            ins().unwrap();
+            });
         });
 
     let button_uninstall_old = Button::new("卸载老版本")
@@ -391,10 +416,12 @@ fn ui_builder() -> impl Widget<AppData> {
                 fs::remove_dir_all(config_path())?;
                 Command::new("taskkill.exe")
                     .args(["/f", "/im", "cloudmusic.exe"])
+                    .creation_flags(0x08000000)
                     .spawn()?
                     .wait()?;
                 Command::new("taskkill.exe")
                     .args(["/f", "/im", "cloudmusicn.exe"])
+                    .creation_flags(0x08000000)
                     .spawn()?
                     .wait()?;
                 fs::remove_file(get_ncm_install_path()?.join("cloudmusic.exe"))?;
@@ -500,7 +527,7 @@ fn download_file(url: &str, path: &str, event_sink: druid::ExtEventSink) {
     let res = tinyget::get(url)
         .with_header(
             "User-Agent",
-            &format!("BetterNCM Installer {};", env!("CARGO_PKG_VERSION")),
+            &format!("BetterNCM Installer/{};", env!("CARGO_PKG_VERSION")),
         )
         .send_lazy()
         .unwrap();
@@ -513,7 +540,7 @@ fn download_file(url: &str, path: &str, event_sink: druid::ExtEventSink) {
         .unwrap_or(0);
 
     event_sink.add_idle_callback(move |data: &mut AppData| {
-        data.tips_string = "正在下载……".into();
+        data.tips_string = "正在下载…".into();
     });
 
     let mut file = File::create(path)
@@ -521,14 +548,14 @@ fn download_file(url: &str, path: &str, event_sink: druid::ExtEventSink) {
         .unwrap();
 
     let mut buf = Vec::with_capacity(file_size);
-    let mut tip_str = "正在下载……".to_string();
+    let mut tip_str = "正在下载…".to_string();
     for data in res {
         let (byte, length) = data.unwrap();
         buf.reserve(length);
         buf.push(byte);
 
         let progress = buf.len() as f64 / file_size as f64;
-        let percent_progress = (progress * 100.).floor() as u32;
+        let percent_progress = ((progress * 100.).floor() as u32).min(100).max(0);
         let new_tip_str = format!("正在下载：{path}（{percent_progress}%）");
         if tip_str != new_tip_str {
             tip_str = new_tip_str.to_owned();
@@ -544,4 +571,34 @@ fn download_file(url: &str, path: &str, event_sink: druid::ExtEventSink) {
     event_sink.add_idle_callback(move |data: &mut AppData| {
         data.tips_string = "".to_string();
     });
+}
+
+pub fn install_vc_redist_14_x86(event_sink: druid::ExtEventSink) {
+    if is_vc_redist_14_x86_installed() {
+        return;
+    }
+    // https://aka.ms/vs/17/release/VC_redist.x86.exe
+    // Install: /install /passive /norestart
+    // SilentInstall: /install /quiet /norestart
+
+    download_file(
+        "https://aka.ms/vs/17/release/VC_redist.x86.exe",
+        "VC_redist.x86.exe",
+        event_sink.to_owned(),
+    );
+
+    event_sink.add_idle_callback(move |data: &mut AppData| {
+        data.tips_string = "正在安装 VC 运行时…".into();
+        data.progress = 1.;
+    });
+
+    assert!(
+        Command::new("VC_redist.x86.exe")
+            .args(["/install", "/quiet", "/norestart"])
+            .creation_flags(0x08000000)
+            .status()
+            .unwrap()
+            .success(),
+        "VC Redist 运行时安装失败！"
+    );
 }
