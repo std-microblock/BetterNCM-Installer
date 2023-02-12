@@ -24,6 +24,12 @@ pub fn get_ncm_install_path() -> Result<PathBuf> {
     }
 }
 
+pub fn is_vc_redist_14_x86_installed() -> bool {
+    let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
+    hklm.open_subkey("SOFTWARE\\WOW6432Node\\Microsoft\\VisualStudio\\14.0\\VC\\Runtimes\\X86")
+        .is_ok()
+}
+
 pub fn get_ncm_version() -> Result<Version> {
     let map = FileMap::open(&get_ncm_install_path()?.join("cloudmusic.exe"))?;
     let file = PeFile::from_bytes(&map)?;
