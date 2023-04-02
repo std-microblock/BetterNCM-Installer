@@ -1,6 +1,7 @@
 #![windows_subsystem = "windows"]
 #![feature(fs_try_exists)]
-#![feature(box_syntax)]
+#![feature(rustc_attrs)]
+#[rustc_box]
 
 mod ncm_utils;
 use std::fs;
