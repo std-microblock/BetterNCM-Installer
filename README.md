@@ -5,7 +5,7 @@
 
 
 目前支持：
-- [BetterNCM](https://github.com/MicroCBer/BetterNCM)
+- [BetterUniversal for NCM](https://github.com/MicroCBer/BetterNCM)
 
 计划支持：
 - [BetterUniversal for QQNT/Electron](https://github.com/koishi-nt/BetterQQNT)
