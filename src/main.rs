@@ -146,7 +146,6 @@ fn main() -> Result<()> {
         latest_download_url: None,
         installer_version: Version::parse(env!("CARGO_PKG_VERSION"))?,
         ncm_install_path: if let Ok(path) = get_ncm_install_path() {
-            println!("{:#?}",path);
             Some(path)
         } else {
             None

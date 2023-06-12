@@ -56,7 +56,7 @@ pub fn get_ncm_version() -> Result<Version> {
     );
     use std::result::Result::Ok;
     if let Ok(file) = PeFile32::from_bytes(&map) {
-        get_version(file?.resources()?.version_info()?)
+        get_version(file.resources()?.version_info()?)
     } else {
         get_version(PeFile64::from_bytes(&map)?.resources()?.version_info()?)
     }
