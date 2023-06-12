@@ -1,4 +1,7 @@
-#![windows_subsystem = "windows"]
+#![cfg_attr(
+    all(not(debug_assertions), target_os = "windows"),
+    windows_subsystem = "windows"
+)]
 #![feature(fs_try_exists)]
 #![feature(rustc_attrs)]
 #[rustc_box]
@@ -143,6 +146,7 @@ fn main() -> Result<()> {
         latest_download_url: None,
         installer_version: Version::parse(env!("CARGO_PKG_VERSION"))?,
         ncm_install_path: if let Ok(path) = get_ncm_install_path() {
+            println!("{:#?}",path);
             Some(path)
         } else {
             None

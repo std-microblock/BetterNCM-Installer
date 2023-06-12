@@ -3,9 +3,8 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use anyhow::*;
-use pelite::pe32::Pe;
-use pelite::pe32::PeFile;
-use pelite::FileMap;
+use pelite::pe64::Pe;
+use pelite::resources::version_info::VersionInfo;
 use semver::{BuildMetadata, Prerelease, Version};
 use winreg::enums::*;
 use winreg::RegKey;
@@ -31,19 +30,34 @@ pub fn is_vc_redist_14_x86_installed() -> bool {
 }
 
 pub fn get_ncm_version() -> Result<Version> {
+    use pelite::pe::Pe;
+    use pelite::pe32::PeFile as PeFile32;
+    use pelite::pe64::PeFile as PeFile64;
+    use pelite::FileMap;
+
+    let get_version = |version: VersionInfo| {
+        Ok(version
+            .file_info()
+            .fixed
+            .map(|f| Version {
+                major: f.dwFileVersion.Major as u64,
+                minor: f.dwFileVersion.Minor as u64,
+                patch: f.dwFileVersion.Patch as u64,
+                build: BuildMetadata::EMPTY,
+                pre: Prerelease::EMPTY,
+            })
+            .context("Empty file version")?)
+    };
     let map = FileMap::open(&get_ncm_install_path()?.join("cloudmusic.exe"))?;
-    let file = PeFile::from_bytes(&map)?;
-    let version = file.resources()?.version_info()?;
-    println!("{:#?}", version.file_info());
-    Ok(version
-        .file_info()
-        .fixed
-        .map(|f| Version {
-            major: f.dwFileVersion.Major as u64,
-            minor: f.dwFileVersion.Minor as u64,
-            patch: f.dwFileVersion.Patch as u64,
-            build: BuildMetadata::EMPTY,
-            pre: Prerelease::EMPTY,
-        })
-        .context("Empty file version")?)
+
+    print!(
+        "{:#?}",
+        get_version(PeFile64::from_bytes(&map)?.resources()?.version_info()?)
+    );
+    use std::result::Result::Ok;
+    if let Ok(file) = PeFile32::from_bytes(&map) {
+        get_version(file?.resources()?.version_info()?)
+    } else {
+        get_version(PeFile64::from_bytes(&map)?.resources()?.version_info()?)
+    }
 }
