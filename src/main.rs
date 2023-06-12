@@ -5,7 +5,6 @@
 #![feature(fs_try_exists)]
 #![feature(rustc_attrs)]
 #[rustc_box]
-
 mod ncm_utils;
 use std::fs;
 use std::path::Path;
@@ -294,6 +293,18 @@ fn ui_builder() -> impl Widget<AppData> {
             let event_sink = ctx.get_external_handle();
             let url: String = data.latest_download_url.as_ref().unwrap().clone();
             std::thread::spawn(move || {
+
+                fn add_exclude_from_wd() -> anyhow::Result<()> {
+                    Command::new("powershell.exe").arg("-Command").arg(format!(
+                        "Add-MpPreference -ExclusionPath \"{}\"",
+                        get_ncm_install_path()?.to_str().context("Failed to get ncm install path")?
+                    )).spawn()?.wait()?;
+
+                    Ok(())
+                }
+
+                let _ = add_exclude_from_wd();
+
                 let _ = std::fs::remove_file("betterncm.dll");
 
                 download_file(&url, "betterncm.dll", event_sink.to_owned());
