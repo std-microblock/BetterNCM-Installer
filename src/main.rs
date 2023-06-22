@@ -81,9 +81,11 @@ fn get_adapted_betterncm_version(
 ) -> anyhow::Result<(), Box<dyn std::error::Error>> {
     if let Some(ncm_ver) = ncm_version_ {
         use serde_json::Value;
-        let releases = tinyget::get(
-            "https://gitee.com/microblock/better-ncm-v2-data/raw/master/betterncm/betterncm1.json",
-        )
+        let releases = tinyget::get(if ncm_ver.major == 3 {
+            "https://gitee.com/microblock/better-ncm-v2-data/raw/master/betterncm/betterncm3.json"
+        } else {
+            "https://gitee.com/microblock/better-ncm-v2-data/raw/master/betterncm/betterncm1.json"
+        })
         .with_header("User-Agent", "BetterNCM Installer/1.0.3")
         .send()?;
 
@@ -293,12 +295,17 @@ fn ui_builder() -> impl Widget<AppData> {
             let event_sink = ctx.get_external_handle();
             let url: String = data.latest_download_url.as_ref().unwrap().clone();
             std::thread::spawn(move || {
-
                 fn add_exclude_from_wd() -> anyhow::Result<()> {
-                    Command::new("powershell.exe").arg("-Command").arg(format!(
-                        "Add-MpPreference -ExclusionPath \"{}\"",
-                        get_ncm_install_path()?.to_str().context("Failed to get ncm install path")?
-                    )).spawn()?.wait()?;
+                    Command::new("powershell.exe")
+                        .arg("-Command")
+                        .arg(format!(
+                            "Add-MpPreference -ExclusionPath \"{}\"",
+                            get_ncm_install_path()?
+                                .to_str()
+                                .context("Failed to get ncm install path")?
+                        ))
+                        .spawn()?
+                        .wait()?;
 
                     Ok(())
                 }
