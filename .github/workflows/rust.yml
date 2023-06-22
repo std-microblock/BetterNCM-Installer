@@ -25,7 +25,7 @@ jobs:
         rustup default nightly; rustup target add i686-pc-windows-msvc
     - name: Build
       run: 
-        cargo build --verbose --release
+        cargo +nightly build --release --verbose -Z build-std=core,alloc,std,panic_abort -Z build-std-features=panic_immediate_abort --target i686-pc-windows-msvc 
     - name: Upload Artifact
       uses: actions/upload-artifact@v3.1.1
       with:
