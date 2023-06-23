@@ -29,6 +29,11 @@ pub fn is_vc_redist_14_x86_installed() -> bool {
         .is_ok()
 }
 
+pub enum NcmType {
+    x86,
+    x64
+}
+
 pub fn get_ncm_version() -> Result<Version> {
     use pelite::pe::Pe;
     use pelite::pe32::PeFile as PeFile32;
@@ -50,10 +55,6 @@ pub fn get_ncm_version() -> Result<Version> {
     };
     let map = FileMap::open(&get_ncm_install_path()?.join("cloudmusic.exe"))?;
 
-    print!(
-        "{:#?}",
-        get_version(PeFile64::from_bytes(&map)?.resources()?.version_info()?)
-    );
     use std::result::Result::Ok;
     if let Ok(file) = PeFile32::from_bytes(&map) {
         get_version(file.resources()?.version_info()?)
