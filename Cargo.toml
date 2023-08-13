@@ -23,6 +23,7 @@ pelite = "0.10.0"
 semver = "1.0.16"
 dirs = "*"
 tinyget = { version = "1.0", features = ["https"] }
+rfd = "0.11.4"
 
 [profile.release]
 lto = true

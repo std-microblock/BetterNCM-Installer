@@ -24,7 +24,8 @@ use druid::ExtEventSink;
 use druid::{
     AppLauncher, Data, FontDescriptor, FontWeight, Lens, Widget, WidgetExt as _, WindowDesc,
 };
-use ncm_utils::{get_ncm_version, is_vc_redist_14_x86_installed};
+use ncm_utils::Ncm;
+use ncm_utils::{is_vc_redist_14_x64_installed, is_vc_redist_14_x86_installed};
 use semver::Version;
 use winreg::enums::HKEY_CURRENT_USER;
 use winreg::enums::HKEY_LOCAL_MACHINE;
@@ -57,11 +58,9 @@ struct AppData {
     #[data(eq)]
     tips_string: String,
     #[data(eq)]
-    ncm_install_path: Option<PathBuf>,
-    #[data(eq)]
     latest_download_url: Option<String>,
     #[data(eq)]
-    ncm_version: Option<Version>,
+    ncm: Option<Ncm>,
 }
 
 fn config_path() -> String {
@@ -75,18 +74,16 @@ fn config_path() -> String {
 }
 
 fn get_adapted_betterncm_version(
-    ncm_version_: Option<Version>,
+    ncm: Option<Ncm>,
     event_sink: ExtEventSink,
     channel: String,
 ) -> anyhow::Result<(), Box<dyn std::error::Error>> {
-    if let Some(ncm_ver) = ncm_version_ {
+    if let Some(ncm) = ncm {
         use serde_json::Value;
-        let releases = tinyget::get(if ncm_ver.major == 3 {
-            "https://gitee.com/microblock/better-ncm-v2-data/raw/master/betterncm/betterncm3.json"
-        } else {
-            "https://gitee.com/microblock/better-ncm-v2-data/raw/master/betterncm/betterncm1.json"
-        })
-        .with_header("User-Agent", "BetterNCM Installer/1.0.3")
+        let releases = tinyget::get(
+            "https://gitee.com/microblock/better-ncm-v2-data/raw/master/betterncm/betterncm3.json",
+        )
+        .with_header("User-Agent", "BetterNCM Installer/1.0.9")
         .send()?;
 
         let releases = releases.as_str()?;
@@ -100,12 +97,16 @@ fn get_adapted_betterncm_version(
         for (version_req, val) in adapted_versions.iter() {
             if semver::VersionReq::parse(version_req)
                 .context("Failed to parse version req")?
-                .matches(&ncm_ver)
+                .matches(&ncm.version)
             {
                 let latest_version = Some(AdaptedVersionResult::Version(
                     Version::parse(val["version"].to_owned().as_str().unwrap()).unwrap(),
                 ));
-                let latest_url = Some(val["url"].clone().as_str().unwrap().to_string());
+                let latest_url = Some(if ncm.ncm_type == ncm_utils::NcmType::X86 {
+                    val["url_x86"].to_owned().as_str().unwrap().to_string()
+                } else {
+                    val["url_x64"].to_owned().as_str().unwrap().to_string()
+                });
 
                 event_sink.add_idle_callback(move |data: &mut AppData| {
                     data.latest_version = latest_version;
@@ -146,16 +147,19 @@ fn main() -> Result<()> {
         },
         latest_download_url: None,
         installer_version: Version::parse(env!("CARGO_PKG_VERSION"))?,
-        ncm_install_path: if let Ok(path) = get_ncm_install_path() {
-            Some(path)
-        } else {
-            None
-        },
-        ncm_version: get_ncm_version().ok(),
+        ncm: get_ncm_install_path()
+            .and_then(|path| Ncm::get_ncm_by_path(path))
+            .ok(),
+        // ncm_install_path: if let Ok(path) = get_ncm_install_path() {
+        //     Some(path)
+        // } else {
+        //     None
+        // },
+        // ncm_version: get_ncm_version().ok(),
         tips_string: String::new(),
     };
-    if let Some(v) = &data.ncm_version {
-        if v < &Version::new(2, 10, 2) {
+    if let Some(ncm) = &data.ncm {
+        if &ncm.version < &Version::new(2, 10, 2) {
             data.tips_string = "您的网易云版本太低，请更新".to_string();
         }
     }
@@ -163,7 +167,7 @@ fn main() -> Result<()> {
 
     let event_sink = launcher.get_external_handle();
 
-    let ncm_version_ = data.ncm_version.clone();
+    let ncm_version_ = data.ncm.clone();
 
     std::thread::spawn(move || {
         let _ = get_adapted_betterncm_version(ncm_version_, event_sink, "versions".to_string());
@@ -255,8 +259,8 @@ fn ui_builder() -> impl Widget<AppData> {
         .with_child(Label::new("网易云版本: ").with_text_color(Color::grey(0.7)))
         .with_child(
             Label::new(|data: &AppData, _env: &_| -> String {
-                match &data.ncm_version {
-                    Some(ver) => format!("{ver}"),
+                match &data.ncm {
+                    Some(ncm) => format!("{} ({:#?})", ncm.version, ncm.ncm_type).to_lowercase(),
                     None => "未安装".to_string(),
                 }
             })
@@ -275,10 +279,9 @@ fn ui_builder() -> impl Widget<AppData> {
                 .add_idle_callback(move |data: &mut AppData| {
                     data.latest_version = None;
                     data.tips_string = "".into();
-                    let ncm_version_ = data.ncm_version.clone();
+                    let ncm = data.ncm.clone();
                     std::thread::spawn(move || {
-                        let _ =
-                            get_adapted_betterncm_version(ncm_version_, sink, channel.to_string());
+                        let _ = get_adapted_betterncm_version(ncm, sink, channel.to_string());
                     });
                 });
         })
@@ -296,16 +299,16 @@ fn ui_builder() -> impl Widget<AppData> {
             let url: String = data.latest_download_url.as_ref().unwrap().clone();
             std::thread::spawn(move || {
                 fn add_exclude_from_wd() -> anyhow::Result<()> {
-                    Command::new("powershell.exe")
-                        .arg("-Command")
-                        .arg(format!(
-                            "Add-MpPreference -ExclusionPath \"{}\"",
-                            get_ncm_install_path()?
-                                .to_str()
-                                .context("Failed to get ncm install path")?
-                        ))
-                        .spawn()?
-                        .wait()?;
+                    // Command::new("powershell.exe")
+                    //     .arg("-Command")
+                    //     .arg(format!(
+                    //         "Add-MpPreference -ExclusionPath \"{}\"",
+                    //         get_ncm_install_path()?
+                    //             .to_str()
+                    //             .context("Failed to get ncm install path")?
+                    //     ))
+                    //     .spawn()?
+                    //     .wait()?;
 
                     Ok(())
                 }
@@ -315,7 +318,8 @@ fn ui_builder() -> impl Widget<AppData> {
                 let _ = std::fs::remove_file("betterncm.dll");
 
                 download_file(&url, "betterncm.dll", event_sink.to_owned());
-                install_vc_redist_14_x86(event_sink.to_owned());
+
+                install_vc_redist_14(event_sink.to_owned());
 
                 event_sink.add_idle_callback(move |data: &mut AppData| {
                     data.tips_string = "正在安装 BetterNCM…".into();
@@ -362,7 +366,7 @@ fn ui_builder() -> impl Widget<AppData> {
                 let _ = std::fs::remove_file("betterncm.dll");
 
                 download_file(&url, "betterncm.dll", event_sink.to_owned());
-                install_vc_redist_14_x86(event_sink.to_owned());
+                install_vc_redist_14(event_sink.to_owned());
 
                 event_sink.add_idle_callback(move |data: &mut AppData| {
                     data.tips_string = "正在升级/重新安装 BetterNCM…".into();
@@ -469,33 +473,38 @@ fn ui_builder() -> impl Widget<AppData> {
             ins().unwrap();
         });
 
-    let button_set_path = Button::new("修改数据地址为 C:/betterncm")
-        .on_click(|_ctx, _data, _env| {
-            let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-            let (env, _) = hkcu.create_subkey("Environment").unwrap();
-            env.set_value("BETTERNCM_PROFILE", &"C:\\betterncm")
-                .unwrap();
+    let button_set_path = Button::new("修改数据地址").on_click(|_ctx, _data, _env| {
+        let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
+        let (env, _) = hklm
+            .create_subkey("System\\CurrentControlSet\\Control\\Session Manager\\Environment")
+            .unwrap();
 
-            let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
-            let (env, _) = hklm
-                .create_subkey("System\\CurrentControlSet\\Control\\Session Manager\\Environment")
-                .unwrap();
-            env.set_value("BETTERNCM_PROFILE", &"C:\\betterncm")
-                .unwrap();
-        })
-        .disabled_if(|_data, _env| {
-            let get_profile = || {
-                let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-                let (env, _) = hkcu.create_subkey("Environment")?;
-                let profile: String = env.get_value("BETTERNCM_PROFILE")?;
-                Ok(profile)
-            };
-            let profile: anyhow::Result<String> = get_profile();
+        let origin_dir: std::result::Result<String, std::io::Error> = env.get_value("BETTERNCM_PROFILE");
+        let origin_dir = origin_dir.unwrap_or("C:\\betterncm".to_string());
 
-            if let Ok(path) = profile {
-                path != *"C:\\betterncm"
-            } else {
-                true
+        let folder = rfd::FileDialog::new()
+            .set_directory(origin_dir)
+            .pick_folder();
+        if let Some(path) = folder {
+
+            env.set_value("BETTERNCM_PROFILE", &path.to_str().unwrap_or("C:\\betterncm"))
+                .unwrap();
+        }
+    });
+
+    let button_set_ncm_path =
+        Button::new("手动指定网易云地址").on_click(|ctx, data: &mut AppData, _env| {
+            let files = rfd::FileDialog::new()
+                .add_filter("NCM Executable", &["exe"])
+                .pick_files();
+
+            if let Some(files) = files {
+                data.ncm = Ncm::get_ncm_by_path(files[0].parent().unwrap().to_path_buf()).ok();
+                let _ =get_adapted_betterncm_version(
+                    data.ncm.clone(),
+                    ctx.get_external_handle(),
+                    if data.prerelease { "test" } else { "versions" }.to_string(),
+                );
             }
         });
 
@@ -527,7 +536,12 @@ fn ui_builder() -> impl Widget<AppData> {
                     .with_flex_child(button_uninstall_old.expand_width(), 1.),
             )
             .with_spacer(5.)
-            .with_child(button_set_path.expand_width())
+            .with_child(
+                Flex::row()
+                    .with_flex_child(button_set_path.expand_width(), 1.)
+                    .with_spacer(5.)
+                    .with_flex_child(button_set_ncm_path.expand_width(), 1.),
+            )
             .with_spacer(5.)
             .with_child(progress_bar)
             .cross_axis_alignment(druid::widget::CrossAxisAlignment::Start)
@@ -595,32 +609,30 @@ fn download_file(url: &str, path: &str, event_sink: druid::ExtEventSink) {
     });
 }
 
-pub fn install_vc_redist_14_x86(event_sink: druid::ExtEventSink) {
-    if is_vc_redist_14_x86_installed() {
+pub fn install_vc_redist_14(event_sink: druid::ExtEventSink) {
+    if is_vc_redist_14_x86_installed() && is_vc_redist_14_x64_installed() {
         return;
     }
     // https://aka.ms/vs/17/release/VC_redist.x86.exe
     // Install: /install /passive /norestart
     // SilentInstall: /install /quiet /norestart
 
-    download_file(
-        "https://aka.ms/vs/17/release/VC_redist.x86.exe",
-        "VC_redist.x86.exe",
-        event_sink.to_owned(),
-    );
+    let install_url = |url: &str| {
+        download_file(url, "VC_redist.exe", event_sink.to_owned());
 
-    event_sink.add_idle_callback(move |data: &mut AppData| {
-        data.tips_string = "正在安装 VC 运行时…".into();
-        data.progress = 1.;
-    });
+        event_sink.add_idle_callback(move |data: &mut AppData| {
+            data.tips_string = "正在安装 VC 运行时…".into();
+            data.progress = 1.;
+        });
 
-    assert!(
-        Command::new("VC_redist.x86.exe")
+        let _ = Command::new("VC_redist.exe")
             .args(["/install", "/quiet", "/norestart"])
             .creation_flags(0x08000000)
             .status()
             .unwrap()
-            .success(),
-        "VC Redist 运行时安装失败！"
-    );
+            .success();
+    };
+
+    install_url("https://aka.ms/vs/17/release/VC_redist.x86.exe");
+    install_url("https://aka.ms/vs/17/release/VC_redist.x64.exe");
 }
