@@ -83,7 +83,7 @@ fn get_adapted_betterncm_version(
         let releases = tinyget::get(
             "https://gitee.com/microblock/better-ncm-v2-data/raw/master/betterncm/betterncm3.json",
         )
-        .with_header("User-Agent", "BetterNCM Installer/1.0.9")
+        .with_header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36")
         .send()?;
 
         let releases = releases.as_str()?;
