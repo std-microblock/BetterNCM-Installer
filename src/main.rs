@@ -81,7 +81,7 @@ fn get_adapted_betterncm_version(
     if let Some(ncm) = ncm {
         use serde_json::Value;
         let releases = tinyget::get(
-            "https://gitee.com/microblock/better-ncm-v2-data/raw/master/betterncm/betterncm3.json",
+            "https://gitcode.net/qq_21551787/bncm-data-pack2/-/raw/master/betterncm/betterncm3.json",
         )
         .with_header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36")
         .send()?;
