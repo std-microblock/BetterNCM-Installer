@@ -479,28 +479,53 @@ fn ui_builder() -> impl Widget<AppData> {
             .create_subkey("System\\CurrentControlSet\\Control\\Session Manager\\Environment")
             .unwrap();
 
-        let origin_dir: std::result::Result<String, std::io::Error> = env.get_value("BETTERNCM_PROFILE");
+        let origin_dir: std::result::Result<String, std::io::Error> =
+            env.get_value("BETTERNCM_PROFILE");
         let origin_dir = origin_dir.unwrap_or("C:\\betterncm".to_string());
 
         let folder = rfd::FileDialog::new()
             .set_directory(origin_dir)
             .pick_folder();
         if let Some(path) = folder {
+            env.set_value(
+                "BETTERNCM_PROFILE",
+                &path.to_str().unwrap_or("C:\\betterncm"),
+            )
+            .unwrap();
 
-            env.set_value("BETTERNCM_PROFILE", &path.to_str().unwrap_or("C:\\betterncm"))
-                .unwrap();
+            let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+            let (env, _) = hkcu.create_subkey("Environment").unwrap(); // create_subkey opens with write permissions
+            env.set_value(
+                "BETTERNCM_PROFILE",
+                &path.to_str().unwrap_or("C:\\betterncm"),
+            )
+            .unwrap();
         }
     });
 
+    let button_reset_path = Button::new("重置数据地址")
+        .on_click(|_ctx, _data, _env| {
+            let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
+            let (env, _) = hklm
+                .create_subkey("System\\CurrentControlSet\\Control\\Session Manager\\Environment")
+                .unwrap();
+
+            env.delete_subkey("BETTERNCM_PROFILE");
+
+            let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+            let (env, _) = hkcu.create_subkey("Environment").unwrap(); // create_subkey opens with write permissions
+            env.delete_subkey("BETTERNCM_PROFILE");
+        });
+
     let button_set_ncm_path =
-        Button::new("手动指定网易云地址").on_click(|ctx, data: &mut AppData, _env| {
+        Button::new("手动指定网易云").on_click(|ctx, data: &mut AppData, _env| {
             let files = rfd::FileDialog::new()
-                .add_filter("NCM Executable", &["exe"])
+                .add_filter("NCM Executable", &["cloudmusic.exe"])
                 .pick_files();
 
             if let Some(files) = files {
                 data.ncm = Ncm::get_ncm_by_path(files[0].parent().unwrap().to_path_buf()).ok();
-                let _ =get_adapted_betterncm_version(
+                let _ = get_adapted_betterncm_version(
                     data.ncm.clone(),
                     ctx.get_external_handle(),
                     if data.prerelease { "test" } else { "versions" }.to_string(),
@@ -539,6 +564,8 @@ fn ui_builder() -> impl Widget<AppData> {
             .with_child(
                 Flex::row()
                     .with_flex_child(button_set_path.expand_width(), 1.)
+                    .with_spacer(5.)
+                    .with_flex_child(button_reset_path.expand_width(), 1.)
                     .with_spacer(5.)
                     .with_flex_child(button_set_ncm_path.expand_width(), 1.),
             )
