@@ -520,7 +520,7 @@ fn ui_builder() -> impl Widget<AppData> {
     let button_set_ncm_path =
         Button::new("手动指定网易云").on_click(|ctx, data: &mut AppData, _env| {
             let files = rfd::FileDialog::new()
-                .add_filter("NCM Executable", &["cloudmusic.exe"])
+                .add_filter("NCM Executable", &["exe"])
                 .pick_files();
 
             if let Some(files) = files {
