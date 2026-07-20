@@ -206,6 +206,73 @@ fn set_noproxy_localdata() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// BetterNCM 数据目录的默认值（用户未做任何选择时的兜底）。
+const DEFAULT_BETTERNCM_PROFILE: &str = "C:\\betterncm";
+
+/// 弹出文件夹选择框，让用户确认或修改 BetterNCM 数据目录 (`BETTERNCM_PROFILE`)。
+///
+/// - `force = true`：总是弹窗（用于"修改数据地址"按钮）。
+/// - `force = false`：仅当 `BETTERNCM_PROFILE` 当前未设置时才弹窗
+///   （用于首次安装；已设过则沿用，不弹）。
+///
+/// 用户取消时使用 [`DEFAULT_BETTERNCM_PROFILE`]，并同样写入注册表，
+/// 保证留下一个明确的值（而非依赖 DLL 内部硬编码默认）。
+/// 用户选择某个目录时，把所选目录写入注册表。
+///
+/// 写入位置：`HKLM\...\Environment` 与 `HKCU\Environment` 双写，
+/// 写 HKLM 需要管理员权限（与原"修改数据地址"逻辑一致）。
+fn prompt_and_set_data_dir(force: bool) {
+    let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
+    let (hklm_env, _) = hklm
+        .create_subkey("System\\CurrentControlSet\\Control\\Session Manager\\Environment")
+        .unwrap();
+
+    let current: std::result::Result<String, std::io::Error> =
+        hklm_env.get_value("BETTERNCM_PROFILE");
+    let already_set = current.is_ok();
+
+    // 首次安装且已设过 → 沿用现有路径，不弹窗。
+    if !force && already_set {
+        return;
+    }
+
+    // 弹窗初始定位：优先当前值，否则默认值。
+    let initial_dir = current.unwrap_or_else(|_| DEFAULT_BETTERNCM_PROFILE.to_string());
+
+    match rfd::FileDialog::new()
+        .set_directory(&initial_dir)
+        .pick_folder()
+    {
+        // 用户选择目录 → 写入选定路径。
+        Some(p) => {
+            let chosen = p.to_str().unwrap_or(DEFAULT_BETTERNCM_PROFILE);
+            write_betterncm_profile(chosen);
+        }
+        // 用户取消：
+        //   - 首次安装（!force）：写默认值，保证留下明确的 BETTERNCM_PROFILE，
+        //     不依赖 DLL 内部硬编码回落。
+        //   - "修改数据地址"按钮（force）：保持原语义，不改动现有注册表值。
+        None if !force => {
+            write_betterncm_profile(DEFAULT_BETTERNCM_PROFILE);
+        }
+        None => {}
+    }
+}
+
+/// 把 `BETTERNCM_PROFILE` 同时写入 HKLM 和 HKCU 的 Environment 键。
+/// 写 HKLM 需要管理员权限。
+fn write_betterncm_profile(value: &str) {
+    let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
+    let (hklm_env, _) = hklm
+        .create_subkey("System\\CurrentControlSet\\Control\\Session Manager\\Environment")
+        .unwrap();
+    hklm_env.set_value("BETTERNCM_PROFILE", value).unwrap();
+
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    let (hkcu_env, _) = hkcu.create_subkey("Environment").unwrap(); // create_subkey opens with write permissions
+    hkcu_env.set_value("BETTERNCM_PROFILE", value).unwrap();
+}
+
 fn ui_builder() -> impl Widget<AppData> {
     let title = Label::new("BetterNCM Installer".to_string()).with_font(
         FontDescriptor::default()
@@ -295,6 +362,9 @@ fn ui_builder() -> impl Widget<AppData> {
                 || data.new_version
         })
         .on_click(|ctx, data, _env| {
+            // 首次安装：让用户确认或修改数据目录（已设过则不弹窗，沿用现有值）。
+            prompt_and_set_data_dir(false);
+
             let event_sink = ctx.get_external_handle();
             let url: String = data.latest_download_url.as_ref().unwrap().clone();
             std::thread::spawn(move || {
@@ -473,35 +543,8 @@ fn ui_builder() -> impl Widget<AppData> {
             ins().unwrap();
         });
 
-    let button_set_path = Button::new("修改数据地址").on_click(|_ctx, _data, _env| {
-        let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
-        let (env, _) = hklm
-            .create_subkey("System\\CurrentControlSet\\Control\\Session Manager\\Environment")
-            .unwrap();
-
-        let origin_dir: std::result::Result<String, std::io::Error> =
-            env.get_value("BETTERNCM_PROFILE");
-        let origin_dir = origin_dir.unwrap_or("C:\\betterncm".to_string());
-
-        let folder = rfd::FileDialog::new()
-            .set_directory(origin_dir)
-            .pick_folder();
-        if let Some(path) = folder {
-            env.set_value(
-                "BETTERNCM_PROFILE",
-                &path.to_str().unwrap_or("C:\\betterncm"),
-            )
-            .unwrap();
-
-            let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-            let (env, _) = hkcu.create_subkey("Environment").unwrap(); // create_subkey opens with write permissions
-            env.set_value(
-                "BETTERNCM_PROFILE",
-                &path.to_str().unwrap_or("C:\\betterncm"),
-            )
-            .unwrap();
-        }
-    });
+    let button_set_path = Button::new("修改数据地址")
+        .on_click(|_ctx, _data, _env| prompt_and_set_data_dir(true));
 
     let button_reset_path = Button::new("重置数据地址")
         .on_click(|_ctx, _data, _env| {
